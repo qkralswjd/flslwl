@@ -342,28 +342,46 @@ class SettingsWindow:
         bot_frame.columnconfigure(3, weight=1)
 
     def _build_auto_panel(self, frame):
-        """자동 레벨링 설정 패널."""
+        """자동 레벨링 설정 패널 (요정 1단계 전용)."""
         ac = self.automation_config
         arow = 0
 
-        def lf(key, *path):
-            """중첩 dict에서 값 읽기."""
-            node = ac
-            for p in path:
-                node = node.get(p, {}) if isinstance(node, dict) else {}
-            return node.get(key, "")
-
-        ttk.Label(frame, text="▶ 레벨 OCR", font=("",9,"bold")).grid(
+        # ── 키 설정 ──────────────────────────────────────────────────
+        ttk.Label(frame, text="▶ 키 설정", font=("",9,"bold")).grid(
             row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
         arow += 1
 
         for label, keys, default in [
-            ("레벨 X",    ("level_ocr","region","x"),   "0"),
-            ("레벨 Y",    ("level_ocr","region","y"),   "0"),
-            ("레벨 W",    ("level_ocr","region","width"), "80"),
-            ("레벨 H",    ("level_ocr","region","height"), "25"),
-            ("목표레벨1", ("level_ocr","target_level_1"), "5"),
-            ("목표레벨2", ("level_ocr","target_level_2"), "15"),
+            ("물약 키 (HP)",    ("keys","potion"),       "F5"),
+            ("두루마리 키",      ("keys","scroll"),       "F6"),
+            ("속도물약 키",      ("keys","speed_potion"), "F9"),
+            ("물약 쿨타임ms",   ("keys","potion_cooldown_ms"), "3000"),
+        ]:
+            ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
+            node = ac
+            for k in keys[:-1]:
+                node = node.get(k, {}) if isinstance(node, dict) else {}
+            val = str(node.get(keys[-1], default)) if isinstance(node, dict) else default
+            var = tk.StringVar(value=val)
+            ttk.Entry(frame, textvariable=var, width=10).grid(row=arow, column=1, padx=4, pady=1)
+            self.auto_vars[label] = (var, keys)
+            arow += 1
+
+        ttk.Separator(frame, orient="horizontal").grid(
+            row=arow, column=0, columnspan=2, sticky="ew", pady=4)
+        arow += 1
+
+        # ── HP 바 설정 ────────────────────────────────────────────────
+        ttk.Label(frame, text="▶ HP 바", font=("",9,"bold")).grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
+        arow += 1
+
+        for label, keys, default in [
+            ("HP 바 X",    ("hp_bar","region","x"),      "0"),
+            ("HP 바 Y",    ("hp_bar","region","y"),      "0"),
+            ("HP 바 W",    ("hp_bar","region","width"),  "200"),
+            ("HP 바 H",    ("hp_bar","region","height"), "10"),
+            ("HP 경고 %",  ("hp_bar","threshold_pct"),   "50.0"),
         ]:
             ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
             node = ac
@@ -379,17 +397,44 @@ class SettingsWindow:
             row=arow, column=0, columnspan=2, sticky="ew", pady=4)
         arow += 1
 
-        ttk.Label(frame, text="▶ 텔레포트", font=("",9,"bold")).grid(
+        # ── 레벨 OCR 설정 ─────────────────────────────────────────────
+        ttk.Label(frame, text="▶ 레벨 OCR", font=("",9,"bold")).grid(
             row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
         arow += 1
 
         for label, keys, default in [
-            ("TP 키",     ("teleport","key"),            "F1"),
-            ("TP 창 X",   ("teleport","destination_region","x"), "400"),
-            ("TP 창 Y",   ("teleport","destination_region","y"), "150"),
-            ("TP 창 W",   ("teleport","destination_region","width"), "300"),
-            ("TP 창 H",   ("teleport","destination_region","height"), "400"),
-            ("목적지 텍스트", ("teleport","destination_text"), "허수아비"),
+            ("레벨 X",        ("level_ocr","region","x"),      "0"),
+            ("레벨 Y",        ("level_ocr","region","y"),      "0"),
+            ("레벨 W",        ("level_ocr","region","width"),  "80"),
+            ("레벨 H",        ("level_ocr","region","height"), "25"),
+            ("허수아비목표Lv", ("level_ocr","target_level_dummy"), "5"),
+            ("사냥터목표Lv",   ("level_ocr","target_level_hunt"),  "10"),
+        ]:
+            ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
+            node = ac
+            for k in keys[:-1]:
+                node = node.get(k, {}) if isinstance(node, dict) else {}
+            val = str(node.get(keys[-1], default)) if isinstance(node, dict) else default
+            var = tk.StringVar(value=val)
+            ttk.Entry(frame, textvariable=var, width=8).grid(row=arow, column=1, padx=4, pady=1)
+            self.auto_vars[label] = (var, keys)
+            arow += 1
+
+        ttk.Separator(frame, orient="horizontal").grid(
+            row=arow, column=0, columnspan=2, sticky="ew", pady=4)
+        arow += 1
+
+        # ── 말하는 두루마리 (F6) 설정 ────────────────────────────────
+        ttk.Label(frame, text="▶ 두루마리→허수아비", font=("",9,"bold")).grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
+        arow += 1
+
+        for label, keys, default in [
+            ("목적지 창 X",   ("scroll_dummy","destination_region","x"),      "400"),
+            ("목적지 창 Y",   ("scroll_dummy","destination_region","y"),      "150"),
+            ("목적지 창 W",   ("scroll_dummy","destination_region","width"),  "300"),
+            ("목적지 창 H",   ("scroll_dummy","destination_region","height"), "400"),
+            ("목적지 텍스트", ("scroll_dummy","destination_text"),            "허수아비"),
         ]:
             ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
             node = ac
@@ -405,13 +450,14 @@ class SettingsWindow:
             row=arow, column=0, columnspan=2, sticky="ew", pady=4)
         arow += 1
 
+        # ── 허수아비 공격 ─────────────────────────────────────────────
         ttk.Label(frame, text="▶ 허수아비 공격", font=("",9,"bold")).grid(
             row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
         arow += 1
 
         for label, keys, default in [
-            ("허수아비 X", ("dummy","attack_coord","x"), "960"),
-            ("허수아비 Y", ("dummy","attack_coord","y"), "540"),
+            ("허수아비 X",  ("dummy","attack_coord","x"),  "960"),
+            ("허수아비 Y",  ("dummy","attack_coord","y"),  "540"),
             ("공격 간격ms", ("dummy","attack_interval_ms"), "500"),
         ]:
             ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
@@ -428,15 +474,17 @@ class SettingsWindow:
             row=arow, column=0, columnspan=2, sticky="ew", pady=4)
         arow += 1
 
-        ttk.Label(frame, text="▶ 웨이포인트 (사냥터)", font=("",9,"bold")).grid(
+        # ── 사냥터 웨이포인트 ─────────────────────────────────────────
+        ttk.Label(frame, text="▶ 사냥터 웨이포인트", font=("",9,"bold")).grid(
             row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
         arow += 1
 
-        wps = ac.get("waypoints", [{"x":960,"y":400,"label":"사냥터-A","wait_ms":1500}])
-        self._wp_text = tk.Text(frame, width=22, height=5, font=("Consolas",8))
+        hwp_cfg = ac.get("hunt_waypoints", {})
+        wps = hwp_cfg.get("points", [{"x":960,"y":400,"label":"사냥터-A","wait_ms":2000}])
+        self._wp_text = tk.Text(frame, width=24, height=5, font=("Consolas",8))
         self._wp_text.grid(row=arow, column=0, columnspan=2, padx=4, pady=2)
         wp_str = "\n".join(
-            f"{wp.get('x',0)},{wp.get('y',0)},{wp.get('label','WP')},{wp.get('wait_ms',1000)}"
+            f"{wp.get('x',0)},{wp.get('y',0)},{wp.get('label','WP')},{wp.get('wait_ms',2000)}"
             for wp in wps
         )
         self._wp_text.insert("1.0", wp_str)
@@ -465,7 +513,7 @@ class SettingsWindow:
                     value = raw
             nested_set(ac, keys, value)
 
-        # 웨이포인트 파싱
+        # 사냥터 웨이포인트 파싱 → hunt_waypoints.points 에 저장
         wps = []
         for line in self._wp_text.get("1.0", "end").strip().splitlines():
             parts = [p.strip() for p in line.split(",")]
@@ -475,13 +523,13 @@ class SettingsWindow:
                         "x": int(parts[0]),
                         "y": int(parts[1]),
                         "label": parts[2] if len(parts) > 2 else f"WP{len(wps)}",
-                        "wait_ms": int(parts[3]) if len(parts) > 3 else 1500,
+                        "wait_ms": int(parts[3]) if len(parts) > 3 else 2000,
                     }
                     wps.append(wp)
                 except ValueError:
                     pass
         if wps:
-            ac["waypoints"] = wps
+            ac.setdefault("hunt_waypoints", {})["points"] = wps
 
         _save_automation_config(ac)
         self.automation_config = ac

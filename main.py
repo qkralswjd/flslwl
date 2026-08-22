@@ -337,20 +337,22 @@ def run(config, stop_event=None, status_callback=None, automation_config=None):
                 sm_text   = (
                     f"[AUTO] {sm_status['state']}  "
                     f"Lv.{sm_status['level']}  "
+                    f"HP:{sm_status.get('hp_pct','?')}%  "
                     f"Kill:{sm_status['kills']}  "
+                    f"Pot:{sm_status.get('potions',0)}  "
                     f"{sm_status['elapsed_min']}min"
                 )
                 # 상태별 색상
-                from automation.state_machine import HuntingState as HS
                 color_map = {
-                    "IDLE":            (128, 128, 128),
-                    "TELEPORTING":     (255, 200,   0),
-                    "MOVING_TO_DUMMY": (255, 165,   0),
-                    "ATTACKING_DUMMY": (0,   200, 255),
-                    "PATROLLING":      (0,   165, 255),
-                    "HUNTING":         (0,   255,   0),
-                    "LOOTING":         (0,   255, 200),
-                    "DONE":            (255, 255,   0),
+                    "IDLE":               (128, 128, 128),
+                    "USE_SCROLL_DUMMY":   (255, 200,   0),
+                    "MOVE_TO_DUMMY":      (255, 165,   0),
+                    "ATTACKING_DUMMY":    (0,   200, 255),
+                    "USE_SPEED_POTION":   (200, 100, 255),
+                    "MOVE_TO_HUNT_ZONE":  (0,   165, 255),
+                    "HUNTING_10":         (0,   255,   0),
+                    "LOOTING":            (0,   255, 200),
+                    "DONE_PHASE1":        (255, 255,   0),
                 }
                 sm_color = color_map.get(sm_status["state"], (200, 200, 200))
                 cv2.putText(
