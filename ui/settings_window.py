@@ -332,6 +332,10 @@ class SettingsWindow:
         ttk.Button(bot_frame, text="⏹ Auto Stop",  command=self.auto_stop).grid(
             row=2, column=3, padx=4, pady=4, sticky="ew"
         )
+        ttk.Button(bot_frame, text="📍 좌표 세팅 도구 열기",
+                   command=self.open_coord_picker).grid(
+            row=3, column=0, columnspan=4, padx=4, pady=6, sticky="ew"
+        )
         bot_frame.columnconfigure(0, weight=1)
         bot_frame.columnconfigure(1, weight=1)
         bot_frame.columnconfigure(2, weight=1)
@@ -671,6 +675,15 @@ class SettingsWindow:
     def run(self):
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.mainloop()
+
+    def open_coord_picker(self):
+        """좌표 세팅 도구를 별도 창으로 엽니다."""
+        import subprocess, sys
+        picker_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "coordinate_picker.py"
+        )
+        picker_path = os.path.normpath(picker_path)
+        subprocess.Popen([sys.executable, picker_path])
 
     def _on_close(self):
         self.stop_event.set()
