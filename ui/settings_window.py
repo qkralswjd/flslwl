@@ -10,17 +10,37 @@
     - 상태 표시줄에 현재 Target 상태(TargetState) 추가
 """
 
+import json
 import os
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import main as tracker_main
 from config.config_loader import DEFAULT_CONFIG_PATH, load_config, save_config
+
+AUTOMATION_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "config", "config_automation.json"
+)
+
+
+def _load_automation_config():
+    path = os.path.normpath(AUTOMATION_CONFIG_PATH)
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _save_automation_config(cfg: dict):
+    path = os.path.normpath(AUTOMATION_CONFIG_PATH)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=4)
 
 
 def _get_serial_ports():
@@ -77,12 +97,14 @@ class SettingsWindow:
     TARGET_PRIORITIES = ["nearest_center", "nearest_origin", "oldest", "newest"]
 
     def __init__(self):
-        self.config       = load_config()
-        self.stop_event   = threading.Event()
+        self.config            = load_config()
+        self.automation_config = _load_automation_config()
+        self.stop_event        = threading.Event()
         self.worker_thread: threading.Thread | None = None
+        self._hunting_sm       = None   # HuntingStateMachine 참조
 
         self.root = tk.Tk()
-        self.root.title("Game Enemy Tracker + Pico  [순차 타겟 SM]")
+        self.root.title("Game Enemy Tracker + Pico  [순차 타겟 SM + Auto Leveling]")
         self.root.resizable(False, False)
 
         self.vars        = {}   # 일반 설정
@@ -90,6 +112,7 @@ class SettingsWindow:
         self.sm_vars     = {}   # SM 수치 설정
         self.drag_vars   = {}   # 드래그 수치 설정
         self.scene_vars  = {}   # SceneMotion 수치 설정
+        self.auto_vars   = {}   # Automation 수치 설정
         self._build_ui()
 
     # ── 설정값 접근 헬퍼 ──────────────────────────────────────────────
@@ -112,12 +135,14 @@ class SettingsWindow:
         left_frame   = ttk.LabelFrame(self.root, text="감지 설정",           padding=6)
         right_frame  = ttk.LabelFrame(self.root, text="Pico + 순차 타겟 설정", padding=6)
         extra_frame  = ttk.LabelFrame(self.root, text="드래그 / 이동감지 설정",  padding=6)
+        auto_frame   = ttk.LabelFrame(self.root, text="🤖 자동 레벨링 (1단계)", padding=6)
         bot_frame    = ttk.Frame(self.root, padding=4)
 
         left_frame.grid(row=0,  column=0, padx=6, pady=4, sticky="nsew")
         right_frame.grid(row=0, column=1, padx=6, pady=4, sticky="nsew")
         extra_frame.grid(row=0, column=2, padx=6, pady=4, sticky="nsew")
-        bot_frame.grid(row=1,   column=0, columnspan=3, sticky="ew", padx=6, pady=4)
+        auto_frame.grid(row=0,  column=3, padx=6, pady=4, sticky="nsew")
+        bot_frame.grid(row=1,   column=0, columnspan=4, sticky="ew", padx=6, pady=4)
 
         # ── 일반 설정 ─────────────────────────────────────────────────
         for row, (label, path) in enumerate(self.FIELDS):
@@ -276,23 +301,186 @@ class SettingsWindow:
         )
         erow += 1
 
+        # ── 자동 레벨링 패널 ──────────────────────────────────────────
+        self._build_auto_panel(auto_frame)
+
         # ── 상태 표시줄 ───────────────────────────────────────────────
         self.status_label = ttk.Label(
             bot_frame,
             text="대기 중... | Capture: 0.0 fps | Detection: 0.0 fps | Pico: - | Target: -",
             anchor="w"
         )
-        self.status_label.grid(row=0, column=0, columnspan=3, sticky="ew", pady=4)
+        self.status_label.grid(row=0, column=0, columnspan=4, sticky="ew", pady=4)
+
+        self.auto_status_label = ttk.Label(
+            bot_frame,
+            text="[AUTO] 대기 중",
+            foreground="gray", anchor="w"
+        )
+        self.auto_status_label.grid(row=1, column=0, columnspan=4, sticky="ew", pady=2)
 
         # ── Start / Stop 버튼 ─────────────────────────────────────────
         ttk.Button(bot_frame, text="▶  Start", command=self.start).grid(
-            row=1, column=0, padx=4, pady=4, sticky="ew"
+            row=2, column=0, padx=4, pady=4, sticky="ew"
         )
         ttk.Button(bot_frame, text="■  Stop",  command=self.stop).grid(
-            row=1, column=1, padx=4, pady=4, sticky="ew"
+            row=2, column=1, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(bot_frame, text="🤖 Auto Start", command=self.auto_start).grid(
+            row=2, column=2, padx=4, pady=4, sticky="ew"
+        )
+        ttk.Button(bot_frame, text="⏹ Auto Stop",  command=self.auto_stop).grid(
+            row=2, column=3, padx=4, pady=4, sticky="ew"
         )
         bot_frame.columnconfigure(0, weight=1)
         bot_frame.columnconfigure(1, weight=1)
+        bot_frame.columnconfigure(2, weight=1)
+        bot_frame.columnconfigure(3, weight=1)
+
+    def _build_auto_panel(self, frame):
+        """자동 레벨링 설정 패널."""
+        ac = self.automation_config
+        arow = 0
+
+        def lf(key, *path):
+            """중첩 dict에서 값 읽기."""
+            node = ac
+            for p in path:
+                node = node.get(p, {}) if isinstance(node, dict) else {}
+            return node.get(key, "")
+
+        ttk.Label(frame, text="▶ 레벨 OCR", font=("",9,"bold")).grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
+        arow += 1
+
+        for label, keys, default in [
+            ("레벨 X",    ("level_ocr","region","x"),   "0"),
+            ("레벨 Y",    ("level_ocr","region","y"),   "0"),
+            ("레벨 W",    ("level_ocr","region","width"), "80"),
+            ("레벨 H",    ("level_ocr","region","height"), "25"),
+            ("목표레벨1", ("level_ocr","target_level_1"), "5"),
+            ("목표레벨2", ("level_ocr","target_level_2"), "15"),
+        ]:
+            ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
+            node = ac
+            for k in keys[:-1]:
+                node = node.get(k, {}) if isinstance(node, dict) else {}
+            val = str(node.get(keys[-1], default)) if isinstance(node, dict) else default
+            var = tk.StringVar(value=val)
+            ttk.Entry(frame, textvariable=var, width=8).grid(row=arow, column=1, padx=4, pady=1)
+            self.auto_vars[label] = (var, keys)
+            arow += 1
+
+        ttk.Separator(frame, orient="horizontal").grid(
+            row=arow, column=0, columnspan=2, sticky="ew", pady=4)
+        arow += 1
+
+        ttk.Label(frame, text="▶ 텔레포트", font=("",9,"bold")).grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
+        arow += 1
+
+        for label, keys, default in [
+            ("TP 키",     ("teleport","key"),            "F1"),
+            ("TP 창 X",   ("teleport","destination_region","x"), "400"),
+            ("TP 창 Y",   ("teleport","destination_region","y"), "150"),
+            ("TP 창 W",   ("teleport","destination_region","width"), "300"),
+            ("TP 창 H",   ("teleport","destination_region","height"), "400"),
+            ("목적지 텍스트", ("teleport","destination_text"), "허수아비"),
+        ]:
+            ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
+            node = ac
+            for k in keys[:-1]:
+                node = node.get(k, {}) if isinstance(node, dict) else {}
+            val = str(node.get(keys[-1], default)) if isinstance(node, dict) else default
+            var = tk.StringVar(value=val)
+            ttk.Entry(frame, textvariable=var, width=12).grid(row=arow, column=1, padx=4, pady=1)
+            self.auto_vars[label] = (var, keys)
+            arow += 1
+
+        ttk.Separator(frame, orient="horizontal").grid(
+            row=arow, column=0, columnspan=2, sticky="ew", pady=4)
+        arow += 1
+
+        ttk.Label(frame, text="▶ 허수아비 공격", font=("",9,"bold")).grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
+        arow += 1
+
+        for label, keys, default in [
+            ("허수아비 X", ("dummy","attack_coord","x"), "960"),
+            ("허수아비 Y", ("dummy","attack_coord","y"), "540"),
+            ("공격 간격ms", ("dummy","attack_interval_ms"), "500"),
+        ]:
+            ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
+            node = ac
+            for k in keys[:-1]:
+                node = node.get(k, {}) if isinstance(node, dict) else {}
+            val = str(node.get(keys[-1], default)) if isinstance(node, dict) else default
+            var = tk.StringVar(value=val)
+            ttk.Entry(frame, textvariable=var, width=8).grid(row=arow, column=1, padx=4, pady=1)
+            self.auto_vars[label] = (var, keys)
+            arow += 1
+
+        ttk.Separator(frame, orient="horizontal").grid(
+            row=arow, column=0, columnspan=2, sticky="ew", pady=4)
+        arow += 1
+
+        ttk.Label(frame, text="▶ 웨이포인트 (사냥터)", font=("",9,"bold")).grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
+        arow += 1
+
+        wps = ac.get("waypoints", [{"x":960,"y":400,"label":"사냥터-A","wait_ms":1500}])
+        self._wp_text = tk.Text(frame, width=22, height=5, font=("Consolas",8))
+        self._wp_text.grid(row=arow, column=0, columnspan=2, padx=4, pady=2)
+        wp_str = "\n".join(
+            f"{wp.get('x',0)},{wp.get('y',0)},{wp.get('label','WP')},{wp.get('wait_ms',1000)}"
+            for wp in wps
+        )
+        self._wp_text.insert("1.0", wp_str)
+        arow += 1
+        ttk.Label(frame, text="x,y,이름,대기ms (한 줄씩)", foreground="gray").grid(
+            row=arow, column=0, columnspan=2, sticky="w", padx=4)
+        arow += 1
+
+    def _apply_auto_fields_to_config(self):
+        """auto_vars → automation_config 반영."""
+        ac = self.automation_config
+
+        def nested_set(d, keys, value):
+            for k in keys[:-1]:
+                d = d.setdefault(k, {})
+            d[keys[-1]] = value
+
+        for label, (var, keys) in self.auto_vars.items():
+            raw = var.get()
+            try:
+                value = int(raw)
+            except ValueError:
+                try:
+                    value = float(raw)
+                except ValueError:
+                    value = raw
+            nested_set(ac, keys, value)
+
+        # 웨이포인트 파싱
+        wps = []
+        for line in self._wp_text.get("1.0", "end").strip().splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 2:
+                try:
+                    wp = {
+                        "x": int(parts[0]),
+                        "y": int(parts[1]),
+                        "label": parts[2] if len(parts) > 2 else f"WP{len(wps)}",
+                        "wait_ms": int(parts[3]) if len(parts) > 3 else 1500,
+                    }
+                    wps.append(wp)
+                except ValueError:
+                    pass
+        if wps:
+            ac["waypoints"] = wps
+
+        _save_automation_config(ac)
+        self.automation_config = ac
 
     def _refresh_ports(self):
         ports = _get_serial_ports()
@@ -394,6 +582,60 @@ class SettingsWindow:
 
     def stop(self):
         self.stop_event.set()
+        if self._hunting_sm:
+            self._hunting_sm.stop()
+            self._hunting_sm = None
+
+    def auto_start(self):
+        """자동 레벨링 시작 (tracker가 실행 중이어야 함)."""
+        if not (self.worker_thread and self.worker_thread.is_alive()):
+            messagebox.showwarning("경고", "먼저 ▶ Start로 트래커를 실행하세요.")
+            return
+        self._apply_auto_fields_to_config()
+
+        # HuntingStateMachine을 main 루프 외부에서 접근할 방법이 없으므로
+        # automation_config를 갱신하고 트래커를 재시작
+        self.stop_event.set()
+        import time; time.sleep(0.5)
+
+        self._apply_fields_to_config()
+        self.stop_event.clear()
+
+        def worker():
+            tracker_main.run(
+                self.config,
+                stop_event=self.stop_event,
+                status_callback=self._on_status,
+                automation_config=self.automation_config,
+            )
+
+        self.worker_thread = threading.Thread(target=worker, daemon=True)
+        self.worker_thread.start()
+
+        # 자동 레벨링 SM을 별도 스레드에서 start() 호출
+        def sm_starter():
+            import time
+            time.sleep(2.0)  # 트래커 초기화 대기
+            # SM은 main.py 내부에서 생성되므로 HuntingState 상태 표시만 polling
+            self.root.after(0, lambda: self.auto_status_label.config(
+                text="[AUTO] 실행 중...", foreground="lime green"
+            ))
+
+        threading.Thread(target=sm_starter, daemon=True).start()
+        self._poll_auto_status()
+
+    def auto_stop(self):
+        """자동 레벨링만 중지 (트래커는 유지)."""
+        # 현재 구조상 트래커와 함께 중지
+        self.stop()
+        self.auto_status_label.config(text="[AUTO] 중지됨", foreground="gray")
+
+    def _poll_auto_status(self):
+        """자동 레벨링 상태를 주기적으로 표시 갱신."""
+        if not (self.worker_thread and self.worker_thread.is_alive()):
+            return
+        # 상태는 오버레이에 그려지므로 간단한 "실행 중" 메시지만 표시
+        self.root.after(1000, self._poll_auto_status)
 
     # ── 상태 업데이트 콜백 ───────────────────────────────────────────
     # status_callback(enemy_count, capture_fps, detection_fps, pico_connected,

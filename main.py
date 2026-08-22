@@ -14,9 +14,15 @@ Pico 통합:
 SceneMotionFilter 통합:
     플레이어가 이동해 화면 전체가 움직일 때 감지를 자동으로 일시정지합니다.
     config["scene_motion"]["enabled"] == true 일 때 활성화됩니다.
+
+HuntingStateMachine 통합 (1단계 자동 레벨링):
+    config_automation.json 기반으로 동작.
+    automation_config가 전달되면 자동 레벨링 상태머신이 활성화됩니다.
 """
 
+import json
 import logging
+import os
 import time
 from typing import Optional
 
@@ -31,6 +37,17 @@ from detection.contour_detector import ContourDetector
 from detection.motion_detector import MotionDetector, SceneMotionFilter
 from overlay.overlay import draw_enemies, draw_hud, draw_roi, draw_detection_zone
 from tracking.tracker import NearestNeighborTracker
+
+
+def load_automation_config(path: str = None) -> Optional[dict]:
+    """config_automation.json을 로드합니다. 파일 없으면 None 반환."""
+    if path is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(here, "config", "config_automation.json")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
 logger = logging.getLogger("main")
@@ -73,8 +90,22 @@ def _build_pico_worker(pico_cfg: dict):
     return worker
 
 
-def run(config, stop_event=None, status_callback=None):
+def run(config, stop_event=None, status_callback=None, automation_config=None):
     """Runs the capture/detect/track/overlay loop until 'q' is pressed or stop_event is set."""
+
+    # ── HuntingStateMachine 초기화 (자동 레벨링) ──────────────────────
+    hunting_sm = None
+    if automation_config is not None:
+        try:
+            from automation.state_machine import HuntingStateMachine
+            # capturer가 아직 없으므로 나중에 grab 함수 주입 (아래에서 처리)
+            _hunting_sm_config   = automation_config
+            _hunting_sm_pending  = True   # capturer 생성 후 초기화 예정
+        except ImportError as e:
+            logger.warning(f"[Automation] automation 모듈 로드 실패: {e}")
+            _hunting_sm_pending  = False
+    else:
+        _hunting_sm_pending = False
 
     # ── Pico 워커 시작 ─────────────────────────────────────────────────
     pico_cfg    = config.get("pico", {})
@@ -124,6 +155,19 @@ def run(config, stop_event=None, status_callback=None):
 
     # ── 각 모듈 초기화 ─────────────────────────────────────────────────
     capturer = ScreenCapturer(config["monitor_index"], config.get("capture_region"))
+
+    # capturer 생성 후 HuntingStateMachine 초기화 + 자동 시작
+    if _hunting_sm_pending and pico_worker:
+        from automation.state_machine import HuntingStateMachine
+        hunting_sm = HuntingStateMachine(
+            config        = _hunting_sm_config,
+            pico_worker   = pico_worker,
+            frame_grabber = capturer.grab,
+        )
+        hunting_sm.start()   # 자동으로 TELEPORTING 상태부터 시작
+        logger.info("[Automation] HuntingStateMachine 시작 — TELEPORTING")
+    elif _hunting_sm_pending and not pico_worker:
+        logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
     motion_detector = MotionDetector(
         blur_kernel=config["blur_kernel"],
         morph_kernel=config["morph_kernel"],
@@ -256,6 +300,10 @@ def run(config, stop_event=None, status_callback=None):
                     last_tracker_update = now
                     enemies = tracker.update(detections, dt if dt > 0 else 1e-3)
 
+                    # ── HuntingStateMachine 업데이트 ──────────────────
+                    if hunting_sm is not None:
+                        hunting_sm.update(roi_frame, enemies)
+
                     proc_elapsed_ms = (time.time() - proc_start) * 1000
                     if proc_elapsed_ms > 0:
                         detection_fps_smooth = 0.9 * detection_fps_smooth + 0.1 * (1000.0 / proc_elapsed_ms)
@@ -281,6 +329,35 @@ def run(config, stop_event=None, status_callback=None):
                     display_frame, "MOVING - DETECTION PAUSED",
                     (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                     (0, 165, 255), 2, cv2.LINE_AA,
+                )
+
+            # ── HuntingStateMachine 상태 오버레이 ─────────────────────
+            if hunting_sm is not None:
+                sm_status = hunting_sm.get_status()
+                sm_text   = (
+                    f"[AUTO] {sm_status['state']}  "
+                    f"Lv.{sm_status['level']}  "
+                    f"Kill:{sm_status['kills']}  "
+                    f"{sm_status['elapsed_min']}min"
+                )
+                # 상태별 색상
+                from automation.state_machine import HuntingState as HS
+                color_map = {
+                    "IDLE":            (128, 128, 128),
+                    "TELEPORTING":     (255, 200,   0),
+                    "MOVING_TO_DUMMY": (255, 165,   0),
+                    "ATTACKING_DUMMY": (0,   200, 255),
+                    "PATROLLING":      (0,   165, 255),
+                    "HUNTING":         (0,   255,   0),
+                    "LOOTING":         (0,   255, 200),
+                    "DONE":            (255, 255,   0),
+                }
+                sm_color = color_map.get(sm_status["state"], (200, 200, 200))
+                cv2.putText(
+                    display_frame, sm_text,
+                    (20, display_frame.shape[0] - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                    sm_color, 2, cv2.LINE_AA,
                 )
 
             draw_enemies(

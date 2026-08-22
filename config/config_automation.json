@@ -1,0 +1,99 @@
+{
+    "_comment": "1단계 자동 레벨링 설정 파일. 좌표값은 모두 캡처 프레임 기준입니다.",
+
+    "capture_offset": {
+        "_comment": "capture_region의 x,y 값과 동일하게 설정 (config.json의 capture_region)",
+        "x": 240,
+        "y": 0
+    },
+
+    "roi_offset": {
+        "_comment": "config.json의 roi x,y 값과 동일하게 설정",
+        "x": 0,
+        "y": 0
+    },
+
+    "level_ocr": {
+        "_comment": "레벨 표시 영역 (프레임 기준). 'Lv.5' 형식 인식",
+        "region": {
+            "_comment": "레벨 숫자가 보이는 영역. UI에서 직접 지정 예정",
+            "x": 0,
+            "y": 0,
+            "width": 80,
+            "height": 25
+        },
+        "read_interval_s": 2.0,
+        "target_level_1": 5,
+        "target_level_2": 15
+    },
+
+    "teleport": {
+        "_comment": "텔레포트 설정",
+        "key": "F1",
+        "wait_after_key_ms": 800,
+        "wait_after_click_ms": 2500,
+        "destination_region": {
+            "_comment": "텔레포트 창이 뜨는 영역 (프레임 기준). UI에서 직접 지정 예정",
+            "x": 400,
+            "y": 150,
+            "width": 300,
+            "height": 400
+        },
+        "destination_text": "허수아비"
+    },
+
+    "dummy": {
+        "_comment": "허수아비 공격 설정",
+        "attack_coord": {
+            "_comment": "허수아비 클릭 좌표 (절대 화면 좌표). 텔레포트 후 고정 위치",
+            "x": 960,
+            "y": 540
+        },
+        "attack_interval_ms": 500,
+        "move_timeout_ms": 3000
+    },
+
+    "waypoints": [
+        {
+            "_comment": "사냥터 순환 좌표. 절대 화면 좌표로 입력",
+            "x": 960,
+            "y": 400,
+            "label": "사냥터-A",
+            "wait_ms": 1500
+        },
+        {
+            "x": 800,
+            "y": 400,
+            "label": "사냥터-B",
+            "wait_ms": 1500
+        },
+        {
+            "x": 700,
+            "y": 500,
+            "label": "사냥터-C",
+            "wait_ms": 1500
+        }
+    ],
+
+    "move_timeout_ms": 4000,
+
+    "loot": {
+        "_comment": "아데나 줍기 설정",
+        "scan_region": {
+            "_comment": "아데나 텍스트 탐색 영역 (프레임 기준 ROI 좌표)",
+            "x": 0,
+            "y": 0,
+            "width": 1440,
+            "height": 780
+        },
+        "keywords": ["아데나", "Adena", "adena"],
+        "scan_interval_s": 0.5,
+        "click_interval_ms": 400,
+        "timeout_ms": 3000
+    },
+
+    "hunt": {
+        "_comment": "사냥 설정",
+        "idle_timeout_ms": 3000
+    }
+}
