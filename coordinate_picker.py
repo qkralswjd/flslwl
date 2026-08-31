@@ -33,8 +33,8 @@ HERE                   = os.path.dirname(os.path.abspath(__file__))
 AUTOMATION_CONFIG_PATH = os.path.join(HERE, "config", "config_automation.json")
 COORDS_SAVE_PATH       = os.path.join(HERE, "config", "saved_coords.json")
 
-# 항상 모니터 1 (Primary Monitor) 사용
-MONITOR_INDEX = 1
+# 게임이 실행 중인 모니터 인덱스 (mss 기준: 1=왼쪽, 2=오른쪽/주모니터)
+MONITOR_INDEX = 2
 
 
 # ── 저장/로드 ─────────────────────────────────────────────────────────
