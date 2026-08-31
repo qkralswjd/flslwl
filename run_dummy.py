@@ -60,6 +60,14 @@ def main():
     if pico_enabled:
         try:
             from pico.pico_serial import PicoSerialWorker
+            import mss as _mss
+            with _mss.mss() as _sct:
+                _monitors = _sct.monitors
+                _mon = _monitors[monitor_index] if monitor_index < len(_monitors) else _monitors[1]
+                mon_left = _mon["left"]
+                mon_top  = _mon["top"]
+            logger.info(f"  모니터 오프셋: left={mon_left}, top={mon_top}")
+
             port     = pico_cfg.get("port", "COM3")
             baudrate = pico_cfg.get("baudrate", 115200)
             pico     = PicoSerialWorker(
@@ -67,6 +75,8 @@ def main():
                 baudrate=baudrate,
                 on_log=lambda lv, msg: logger.info(f"  [Pico/{lv}] {msg}"),
                 on_command_result=lambda cmd, ok: logger.info(f"  [Pico] {cmd} → {'OK' if ok else 'FAIL'}"),
+                monitor_offset_x=mon_left,
+                monitor_offset_y=mon_top,
             )
             pico.start()
             time.sleep(1.0)   # 연결 안정화 대기

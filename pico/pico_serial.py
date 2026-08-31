@@ -75,9 +75,13 @@ class PicoSerialWorker:
         on_disconnected: Optional[Callable[[str], None]] = None,
         on_log: Optional[Callable[[str, str], None]] = None,
         on_command_result: Optional[Callable[[str, bool], None]] = None,
+        monitor_offset_x: int = 0,
+        monitor_offset_y: int = 0,
     ):
         self.port     = port
         self.baudrate = baudrate
+        self._monitor_offset_x = monitor_offset_x
+        self._monitor_offset_y = monitor_offset_y
 
         self._on_connected      = on_connected      or (lambda: None)
         self._on_disconnected   = on_disconnected   or (lambda r: None)
@@ -249,17 +253,20 @@ class PicoSerialWorker:
         max_iters: int = MAX_CORRECTION_ITERS,
     ) -> bool:
         """폐루프 절대 좌표 이동 (GetCursorPos + 댐핑 보정)."""
+        # 게임 화면 내부 좌표 → 가상 데스크탑 절대 좌표로 변환
+        abs_target_x = target_x + self._monitor_offset_x
+        abs_target_y = target_y + self._monitor_offset_y
         for i in range(max_iters):
             try:
                 cur_x, cur_y = _get_cursor_pos()
             except Exception as exc:
                 self._on_log("ERROR", f"GetCursorPos 실패: {exc}")
                 return False
-            dx = target_x - cur_x
-            dy = target_y - cur_y
-            self._on_log("DEBUG", f"_move_to iter={i} cur=({cur_x},{cur_y}) target=({target_x},{target_y}) dx={dx} dy={dy}")
+            dx = abs_target_x - cur_x
+            dy = abs_target_y - cur_y
+            self._on_log("DEBUG", f"_move_to iter={i} cur=({cur_x},{cur_y}) abs_target=({abs_target_x},{abs_target_y}) dx={dx} dy={dy}")
             if abs(dx) <= tolerance and abs(dy) <= tolerance:
-                self._on_log("DEBUG", f"_move_to 수렴 → ({target_x},{target_y})")
+                self._on_log("DEBUG", f"_move_to 수렴 → abs({abs_target_x},{abs_target_y})")
                 return True
             send_dx = round(dx * CORRECTION_DAMPING) or (1 if dx > 0 else -1)
             send_dy = round(dy * CORRECTION_DAMPING) or (1 if dy > 0 else -1)
