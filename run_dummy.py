@@ -71,7 +71,7 @@ def main():
                 mon_top  = _mon["top"]
             logger.info(f"  모니터 오프셋: left={mon_left}, top={mon_top}")
 
-            port     = pico_cfg.get("port", "COM3")
+            port     = pico_cfg.get("serial_port", pico_cfg.get("port", "COM4"))
             baudrate = pico_cfg.get("baudrate", 115200)
             pico     = PicoSerialWorker(
                 port=port,
