@@ -33,6 +33,11 @@ _HP_HSV_RANGES = [
 def _calc_hp_pct(crop: np.ndarray) -> float:
     """HP 바 크롭 이미지에서 HP% 를 계산합니다.
 
+    가로 방향 HP 바 길이 비율로 계산합니다.
+    - 각 열(column)에 빨간 픽셀이 하나라도 있으면 "채워진 열"로 판단
+    - 왼쪽부터 연속으로 채워진 열의 비율 = HP%
+    - 전체 픽셀 비율 방식은 테두리/여백 포함 시 50% 오류 발생
+
     Args:
         crop: BGR 이미지 (HP 바 영역)
 
@@ -51,12 +56,31 @@ def _calc_hp_pct(crop: np.ndarray) -> float:
         m = cv2.inRange(hsv, np.array(lower), np.array(upper))
         mask = cv2.bitwise_or(mask, m)
 
-    total_pixels = crop.shape[0] * crop.shape[1]
-    if total_pixels == 0:
+    total_cols = mask.shape[1]
+    if total_cols == 0:
         return 100.0
 
-    red_pixels = int(np.count_nonzero(mask))
-    return round((red_pixels / total_pixels) * 100.0, 1)
+    # 각 열에 빨간 픽셀이 하나라도 있으면 True
+    col_has_red = np.any(mask > 0, axis=0)  # shape: (width,)
+
+    # 왼쪽부터 연속으로 채워진 열 수 계산
+    # (HP 바는 왼쪽=꽉 참, 오른쪽=빈 공간 방식)
+    filled_cols = 0
+    for has_red in col_has_red:
+        if has_red:
+            filled_cols += 1
+        else:
+            break  # 연속이 끊기면 HP 바 끝
+
+    hp_pct = round((filled_cols / total_cols) * 100.0, 1)
+
+    # 연속 채우기가 0인데 전체 빨간 픽셀이 존재하면 폴백: 전체 비율
+    # (HP 바가 오른쪽→왼쪽으로 줄어드는 구조 대비)
+    if hp_pct == 0.0 and np.any(col_has_red):
+        red_cols = int(np.count_nonzero(col_has_red))
+        hp_pct = round((red_cols / total_cols) * 100.0, 1)
+
+    return hp_pct
 
 
 class HpReader:
