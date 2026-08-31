@@ -71,29 +71,16 @@
         "move_timeout_ms": 3000
     },
     "hunt_waypoints": {
-        "_comment": "Lv.5 달성 후 이동할 사냥터 웨이포인트 (절대 화면 기준). 순환 이동",
+        "_comment": "Lv.5 달성 후 사냥터까지 순차 클릭 이동. 클릭 후 move_timeout_ms 경과하면 도착 간주 → 다음 이동",
+        "move_timeout_ms": 10000,
         "points": [
-            {
-                "_comment": "사냥터 구역 좌표. coordinate_picker.py로 직접 지정 예정",
-                "x": 960,
-                "y": 400,
-                "label": "사냥터-A",
-                "wait_ms": 2000
-            },
-            {
-                "x": 800,
-                "y": 400,
-                "label": "사냥터-B",
-                "wait_ms": 2000
-            },
-            {
-                "x": 700,
-                "y": 500,
-                "label": "사냥터-C",
-                "wait_ms": 2000
-            }
-        ],
-        "move_timeout_ms": 5000
+            {"x": 1023, "y": 763, "label": "1차이동", "wait_ms": 500},
+            {"x": 343,  "y": 722, "label": "2차이동", "wait_ms": 500},
+            {"x": 990,  "y": 763, "label": "3차이동", "wait_ms": 500},
+            {"x": 1090, "y": 792, "label": "4차이동", "wait_ms": 500},
+            {"x": 1285, "y": 779, "label": "5차이동", "wait_ms": 500},
+            {"x": 1600, "y": 460, "label": "6차이동(사냥터도착)", "wait_ms": 500}
+        ]
     },
     "loot": {
         "_comment": "아데나 줍기 설정",

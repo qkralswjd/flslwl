@@ -183,7 +183,7 @@ class HuntingStateMachine:
             waypoints       = wp_points,
             capture_offset  = self._cap_offset,
             move_timeout_ms = wp_timeout,
-            loop            = True,
+            loop            = False,  # 6번째 도착 후 HUNTING_10으로 전환
         )
 
         # ── 아데나 탐지기 ─────────────────────────────────────────────
@@ -461,6 +461,9 @@ class HuntingStateMachine:
         if status == "ARRIVED":
             label = self.hunt_mover.current_label
             logger.info(f"[HuntingSM] 웨이포인트 '{label}' 도착 — 대기 중")
+        elif status == "DONE":
+            logger.info("[HuntingSM] 사냥터 도착 완료 → HUNTING_10 전환")
+            self._enter(HuntingState.HUNTING_10)
 
     def _update_hunting_10(
         self, frame: np.ndarray, enemies: list
