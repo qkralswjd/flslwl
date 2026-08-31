@@ -208,6 +208,10 @@ class HuntingStateMachine:
 
         # ── 속도 물약 대기 ─────────────────────────────────────────────
         self._speed_potion_wait   = 1.0   # F9 후 대기 시간 (초)
+        self._speed_potion_sent_at = 0.0  # F9 키 입력 시각 (비블로킹 대기용)
+
+        # ── 텔레포트 재시도 타임스탬프 (비블로킹) ─────────────────────
+        self._teleport_retry_at   = 0.0   # 이 시각 전에는 재시도 안 함
 
         # ── 통계 ──────────────────────────────────────────────────────
         self.kills       = 0
@@ -281,20 +285,34 @@ class HuntingStateMachine:
     # ── 상태별 처리 메서드 ────────────────────────────────────────────────
 
     def _update_use_scroll_dummy(self) -> None:
-        """F6 말하는 두루마리 → 목적지 창 → '허수아비 수련장' 클릭."""
-        logger.info(
-            f"[HuntingSM] {self.key_scroll} 말하는 두루마리 사용 "
-            f"→ 허수아비 수련장으로 텔레포트"
-        )
-        success = self.scroll_teleporter.execute(self.grab, self.pico)
-        if success:
-            logger.info("[HuntingSM] ✅ 텔레포트 성공 → 허수아비 이동 시작")
+        """F6 말하는 두루마리 → 목적지 창 → '허수아비 수련장' 클릭.
+
+        TeleportHandler.tick()을 매 update() 호출마다 한 번씩 실행.
+        tick()이 None을 반환하면 진행 중 -> 즉시 return (비블로킹).
+        tick()이 False를 반환하면 2초 후 재시도 (retry_at 설정 후 reset).
+        tick()이 True를 반환하면 MOVE_TO_DUMMY로 전환.
+        """
+        now = time.monotonic()
+
+        # 실패 후 재시도 대기 중이면 즉시 return (tick 차단 없음)
+        if now < self._teleport_retry_at:
+            return
+
+        result = self.scroll_teleporter.tick(self.grab, self.pico)
+
+        if result is True:
+            logger.info("[HuntingSM] 텔레포트 성공 -> 허수아비 이동 시작")
             self._dummy_move_done = False
-            self._enter(HuntingState.MOVE_TO_DUMMY)
-        else:
-            logger.warning("[HuntingSM] ⚠ 텔레포트 실패 — 2초 후 재시도")
-            time.sleep(2.0)
-            # 상태 유지 → 다음 tick에 재시도
+            self._enter(HuntingState.MOVE_TO_DUMMY)   # _enter에서 retry_at 리셋
+
+        elif result is False:
+            # 최대 재시도 소진 -> 2초 후 전체 재시도
+            self._teleport_retry_at = now + 2.0
+            self.scroll_teleporter.reset()   # tick 단계 초기화
+            logger.warning(
+                "[HuntingSM] 텔레포트 실패 -- 2초 후 재시도 (비블로킹)"
+            )
+        # result is None: 진행 중, 다음 tick까지 대기
 
     def _update_move_to_dummy(self) -> None:
         """허수아비 방향으로 드래그 준비 (이동 없이 바로 공격 시작)."""
@@ -342,12 +360,27 @@ class HuntingStateMachine:
             )
 
     def _update_use_speed_potion(self) -> None:
-        """F9 속도향상물약 사용 후 대기."""
-        logger.info(f"[HuntingSM] {self.key_speed_potion} 속도향상물약 사용")
-        self.pico.key_tap_name(self.key_speed_potion, hold_ms=80)
-        time.sleep(self._speed_potion_wait)
+        """F9 속도향상물약 사용 후 비블로킹 대기.
 
-        logger.info("[HuntingSM] 속도향상물약 완료 → 사냥터로 이동 시작")
+        최초 진입 시 키 입력 + _speed_potion_sent_at 기록.
+        대기 완료 전까지는 즉시 return (tick 차단 없음).
+        """
+        now = time.monotonic()
+
+        # 최초 진입: 키 입력 + 타임스탬프 기록
+        if self._speed_potion_sent_at == 0.0:
+            logger.info(f"[HuntingSM] {self.key_speed_potion} 속도향상물약 사용")
+            self.pico.key_tap_name(self.key_speed_potion, hold_ms=80)
+            self._speed_potion_sent_at = now
+            return  # 이번 tick은 여기서 종료
+
+        # 대기 중
+        if now - self._speed_potion_sent_at < self._speed_potion_wait:
+            return  # 아직 대기 중, tick 차단 없음
+
+        # 대기 완료 -> 사냥터 이동
+        logger.info("[HuntingSM] 속도향상물약 완료 -> 사냥터로 이동 시작")
+        self._speed_potion_sent_at = 0.0   # 리셋 (재진입 대비)
         self.hunt_mover.start()
         self._enter(HuntingState.MOVE_TO_HUNT_ZONE)
 
@@ -461,7 +494,15 @@ class HuntingStateMachine:
         prev = self.state
         self.state       = new_state
         self._entered_at = time.time()
-        logger.info(f"[HuntingSM] {prev.name} → {new_state.name}")
+        logger.info(f"[HuntingSM] {prev.name} -> {new_state.name}")
+
+        # 상태 전환 시 비블로킹 타이머 리셋 (재진입 오작동 방지)
+        if new_state != HuntingState.USE_SPEED_POTION:
+            self._speed_potion_sent_at = 0.0
+        # USE_SCROLL_DUMMY 진입: TeleportHandler tick 단계 초기화
+        if new_state == HuntingState.USE_SCROLL_DUMMY:
+            self.scroll_teleporter.reset()
+        self._teleport_retry_at = 0.0
 
     # ── 상태 조회 API ─────────────────────────────────────────────────────
 
