@@ -108,9 +108,6 @@ def main():
     )
 
     # 텔레포트 없이 허수아비 공격부터 즉시 시작
-    # 테스트용: 현재 레벨(14)보다 높은 목표 레벨로 임시 설정 → 드래그 실제 실행 확인
-    sm.target_level_dummy = 99
-    logger.info("  [TEST] target_level_dummy=99 (드래그 실제 실행 확인용)")
     sm.start_at_dummy()
     logger.info("  start_at_dummy() 호출 → ATTACKING_DUMMY 진입")
     logger.info("  Ctrl+C 로 종료")
