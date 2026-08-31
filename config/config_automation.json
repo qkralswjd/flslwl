@@ -22,10 +22,10 @@
     "hp_bar": {
         "_comment": "HP 바 영역 (절대 화면 기준). HSV 빨간색 픽셀 비율로 HP% 계산",
         "region": {
-            "x": 551,
-            "y": 830,
-            "width": 331,
-            "height": 61
+            "x": 548,
+            "y": 842,
+            "width": 335,
+            "height": 53
         },
         "threshold_pct": 50.0,
         "read_interval_s": 0.5
