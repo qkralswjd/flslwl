@@ -546,7 +546,7 @@ class DiagnosticRunner:
         if self._hp_reader is not None:
             rec.hp_pct = self._hp_reader.read(frame)
         if self._level_reader is not None:
-            lv = self._level_reader.get_cached()
+            lv = self._level_reader.read(frame)   # OCR 실행 (2초 캐시 적용)
             rec.level = lv
         if self._loot_thread is not None:
             # 백그라운드 스레드 결과 읽기 (non-blocking)
