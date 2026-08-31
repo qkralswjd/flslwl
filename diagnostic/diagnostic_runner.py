@@ -35,8 +35,8 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-# Windows 전용 모듈은 런타임에 임포트 (pytest 환경에서 모듈 레벨 실패 방지)
-# capture, tracker 등은 DiagnosticRunner.setup() 또는 run() 시점에 임포트한다.
+# NullPicoWorker는 순수 Python — 플랫폼 의존 없으므로 모듈 레벨 임포트 OK
+# capture / tracker 등 Windows 전용 모듈은 setup() 내부에서 임포트한다
 from pico.null_pico import NullPicoWorker
 # DiagRecord / infer_decision 은 순수 로직 모듈에서 가져온다
 from diagnostic.models import DiagRecord, infer_decision as _infer_decision
@@ -226,6 +226,12 @@ class DiagnosticRunner:
 
     def setup(self) -> None:
         """모든 perception 모듈을 초기화한다."""
+        # Windows 전용 모듈 — setup() 시점에 임포트 (pytest 모듈 레벨 실패 방지)
+        from capture.screen_capture import ScreenCapturer
+        from detection.contour_detector import ContourDetector
+        from detection.motion_detector import MotionDetector, SceneMotionFilter
+        from tracking.tracker import NearestNeighborTracker
+
         cfg = self.cfg
         is_lev = (self.mode == "leveling")
 
