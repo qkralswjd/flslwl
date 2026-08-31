@@ -113,6 +113,10 @@ class SettingsWindow:
         self.drag_vars   = {}   # 드래그 수치 설정
         self.scene_vars  = {}   # SceneMotion 수치 설정
         self.auto_vars   = {}   # Automation 수치 설정
+
+        # 현재 선택된 모드: "leveling" | "dungeon"
+        self._mode = tk.StringVar(value="leveling")
+
         self._build_ui()
 
     # ── 설정값 접근 헬퍼 ──────────────────────────────────────────────
@@ -132,126 +136,199 @@ class SettingsWindow:
     # ── UI 구성 ───────────────────────────────────────────────────────
 
     def _build_ui(self):
-        left_frame   = ttk.LabelFrame(self.root, text="감지 설정",           padding=6)
-        right_frame  = ttk.LabelFrame(self.root, text="Pico + 순차 타겟 설정", padding=6)
-        extra_frame  = ttk.LabelFrame(self.root, text="드래그 / 이동감지 설정",  padding=6)
-        auto_frame   = ttk.LabelFrame(self.root, text="🤖 자동 레벨링 (1단계)", padding=6)
-        bot_frame    = ttk.Frame(self.root, padding=4)
+        # ── 모드 선택 탭 (최상단) ─────────────────────────────────────
+        mode_frame = ttk.Frame(self.root, padding=4)
+        mode_frame.grid(row=0, column=0, columnspan=4, sticky="ew", padx=6, pady=(6, 0))
 
-        left_frame.grid(row=0,  column=0, padx=6, pady=4, sticky="nsew")
-        right_frame.grid(row=0, column=1, padx=6, pady=4, sticky="nsew")
-        extra_frame.grid(row=0, column=2, padx=6, pady=4, sticky="nsew")
-        auto_frame.grid(row=0,  column=3, padx=6, pady=4, sticky="nsew")
-        bot_frame.grid(row=1,   column=0, columnspan=4, sticky="ew", padx=6, pady=4)
+        ttk.Label(mode_frame, text="🎮 모드 선택:", font=("", 10, "bold")).pack(side="left", padx=(0, 8))
 
-        # ── 일반 설정 ─────────────────────────────────────────────────
+        self._btn_leveling = tk.Button(
+            mode_frame, text="⚔  1~10레벨 모드",
+            font=("", 10, "bold"), bg="#2a6ead", fg="white",
+            relief="raised", padx=12, pady=6,
+            command=lambda: self._switch_mode("leveling"),
+        )
+        self._btn_leveling.pack(side="left", padx=4)
+
+        self._btn_dungeon = tk.Button(
+            mode_frame, text="🏰  던전 사냥 모드",
+            font=("", 10, "bold"), bg="#555555", fg="white",
+            relief="raised", padx=12, pady=6,
+            command=lambda: self._switch_mode("dungeon"),
+        )
+        self._btn_dungeon.pack(side="left", padx=4)
+
+        self._mode_hint = ttk.Label(
+            mode_frame, text="현재: 1~10레벨 모드  (드래그 자동사냥 → 5렙)",
+            foreground="#2a6ead", font=("", 9),
+        )
+        self._mode_hint.pack(side="left", padx=12)
+
+        # ── 패널 컨테이너 ─────────────────────────────────────────────
+        panels_frame = ttk.Frame(self.root, padding=0)
+        panels_frame.grid(row=1, column=0, columnspan=4, sticky="nsew", padx=0, pady=0)
+
+        # 1~10레벨 모드 패널
+        self._leveling_panel = ttk.Frame(panels_frame, padding=0)
+        # 던전 사냥 모드 패널
+        self._dungeon_panel  = ttk.Frame(panels_frame, padding=0)
+
+        # 처음엔 레벨링 패널 표시
+        self._leveling_panel.grid(row=0, column=0, sticky="nsew")
+
+        # ── 레벨링 패널 내부 구성 ─────────────────────────────────────
+        lv_left  = ttk.LabelFrame(self._leveling_panel, text="감지 설정",            padding=6)
+        lv_pico  = ttk.LabelFrame(self._leveling_panel, text="Pico 설정",            padding=6)
+        lv_auto  = ttk.LabelFrame(self._leveling_panel, text="⚔ 1~10레벨 자동사냥", padding=6)
+        lv_left.grid(row=0, column=0, padx=6, pady=4, sticky="nsew")
+        lv_pico.grid(row=0, column=1, padx=6, pady=4, sticky="nsew")
+        lv_auto.grid(row=0, column=2, padx=6, pady=4, sticky="nsew")
+
+        # ── 던전 패널 내부 구성 ───────────────────────────────────────
+        dn_left  = ttk.LabelFrame(self._dungeon_panel, text="감지 설정",              padding=6)
+        dn_right = ttk.LabelFrame(self._dungeon_panel, text="Pico + 순차 타겟 설정",  padding=6)
+        dn_extra = ttk.LabelFrame(self._dungeon_panel, text="드래그 / 이동감지 설정", padding=6)
+        dn_left.grid(row=0,  column=0, padx=6, pady=4, sticky="nsew")
+        dn_right.grid(row=0, column=1, padx=6, pady=4, sticky="nsew")
+        dn_extra.grid(row=0, column=2, padx=6, pady=4, sticky="nsew")
+
+        # ── alias: 기존 코드가 left_frame/right_frame/extra_frame/auto_frame을 쓰므로
+        left_frame  = dn_left
+        right_frame = dn_right
+        extra_frame = dn_extra
+        auto_frame  = lv_auto
+
+        # bot_frame은 공통 (항상 표시)
+        bot_frame = ttk.Frame(self.root, padding=4)
+        bot_frame.grid(row=2, column=0, columnspan=4, sticky="ew", padx=6, pady=4)
+
+        # ── 레벨링 패널: 감지 설정 (lv_left) ─────────────────────────
         for row, (label, path) in enumerate(self.FIELDS):
-            ttk.Label(left_frame, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+            ttk.Label(lv_left, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
             var = tk.StringVar(value=str(self._get(path)))
-            ttk.Entry(left_frame, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
+            ttk.Entry(lv_left, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
+            # vars는 던전 패널과 공유 (같은 config)
             self.vars[label] = (var, path)
 
-        # ── Pico 설정 ─────────────────────────────────────────────────
-        row = 0
-
-        # 활성화 체크박스
+        # ── 레벨링 패널: Pico 설정 (lv_pico) ─────────────────────────
+        prow = 0
         self._pico_enabled = tk.BooleanVar(
             value=bool(self.config.get("pico", {}).get("enabled", False))
         )
+        ttk.Checkbutton(lv_pico, text="Pico 활성화", variable=self._pico_enabled).grid(
+            row=prow, column=0, columnspan=2, sticky="w", pady=4)
+        prow += 1
+
+        ttk.Label(lv_pico, text="Serial Port").grid(row=prow, column=0, sticky="w", padx=4)
+        self._port_var = tk.StringVar(value=self.config.get("pico", {}).get("serial_port", "COM3"))
+        self._port_combo = ttk.Combobox(
+            lv_pico, textvariable=self._port_var, width=9,
+            values=_get_serial_ports(), state="readonly"
+        )
+        self._port_combo.grid(row=prow, column=1, padx=4, pady=2)
+        ttk.Button(lv_pico, text="⟳", width=3, command=self._refresh_ports).grid(
+            row=prow, column=2, padx=2)
+        prow += 1
+
+        for label, path in self.PICO_NUM_FIELDS:
+            ttk.Label(lv_pico, text=label).grid(row=prow, column=0, sticky="w", padx=4, pady=2)
+            var = tk.StringVar(value=str(self._get(path) or 0))
+            ttk.Entry(lv_pico, textvariable=var, width=10).grid(row=prow, column=1, padx=4, pady=2)
+            self.pico_vars[label] = (var, path)
+            prow += 1
+
+        # ── 던전 패널: 감지 설정 (dn_left) ───────────────────────────
+        for row, (label, path) in enumerate(self.FIELDS):
+            ttk.Label(dn_left, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+            # vars는 이미 lv_left에서 등록됨 — 동일 var 재사용
+            var = self.vars[label][0]
+            ttk.Entry(dn_left, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
+
+        # ── 던전 패널: Pico + SM 설정 (dn_right) ─────────────────────
+        row = 0
         ttk.Checkbutton(
-            right_frame, text="Pico 활성화", variable=self._pico_enabled
+            dn_right, text="Pico 활성화", variable=self._pico_enabled
         ).grid(row=row, column=0, columnspan=2, sticky="w", pady=4)
         row += 1
 
-        # 포트 선택
-        ttk.Label(right_frame, text="Serial Port").grid(row=row, column=0, sticky="w", padx=4)
-        self._port_var = tk.StringVar(
-            value=self.config.get("pico", {}).get("serial_port", "COM3")
-        )
-        self._port_combo = ttk.Combobox(
-            right_frame, textvariable=self._port_var, width=9,
+        ttk.Label(dn_right, text="Serial Port").grid(row=row, column=0, sticky="w", padx=4)
+        self._port_combo2 = ttk.Combobox(
+            dn_right, textvariable=self._port_var, width=9,
             values=_get_serial_ports(), state="readonly"
         )
-        self._port_combo.grid(row=row, column=1, padx=4, pady=2)
+        self._port_combo2.grid(row=row, column=1, padx=4, pady=2)
         ttk.Button(
-            right_frame, text="⟳", width=3,
+            dn_right, text="⟳", width=3,
             command=self._refresh_ports
         ).grid(row=row, column=2, padx=2)
         row += 1
 
-        # Pico 수치 설정 (pulse, offset)
+        # Pico 수치 설정 (pulse, offset) - 던전 패널
         for label, path in self.PICO_NUM_FIELDS:
-            ttk.Label(right_frame, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
-            var = tk.StringVar(value=str(self._get(path) or 0))
-            ttk.Entry(right_frame, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
+            ttk.Label(dn_right, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+            var = self.pico_vars.get(label, (tk.StringVar(value=str(self._get(path) or 0)), path))[0]
+            ttk.Entry(dn_right, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
             self.pico_vars[label] = (var, path)
             row += 1
 
         # ── 구분선 ────────────────────────────────────────────────────
-        ttk.Separator(right_frame, orient="horizontal").grid(
+        ttk.Separator(dn_right, orient="horizontal").grid(
             row=row, column=0, columnspan=3, sticky="ew", pady=6
         )
         row += 1
 
         # ── 순차 타겟 상태머신(SM) 설정 ───────────────────────────────
         ttk.Label(
-            right_frame, text="▶ 순차 타겟 상태머신",
+            dn_right, text="▶ 순차 타겟 상태머신",
             font=("", 9, "bold")
         ).grid(row=row, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4))
         row += 1
 
-        # SM 수치 필드
         for label, path in self.SM_NUM_FIELDS:
-            ttk.Label(right_frame, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
+            ttk.Label(dn_right, text=label).grid(row=row, column=0, sticky="w", padx=4, pady=2)
             var = tk.StringVar(value=str(self._get(path) or 0))
-            ttk.Entry(right_frame, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
+            ttk.Entry(dn_right, textvariable=var, width=10).grid(row=row, column=1, padx=4, pady=2)
             self.sm_vars[label] = (var, path)
             row += 1
 
-        # 타겟 우선순위 드롭다운
-        ttk.Label(right_frame, text="Target Priority").grid(row=row, column=0, sticky="w", padx=4)
+        ttk.Label(dn_right, text="Target Priority").grid(row=row, column=0, sticky="w", padx=4)
         self._priority_var = tk.StringVar(
             value=self.config.get("pico", {}).get("target_priority", "nearest_center")
         )
         ttk.Combobox(
-            right_frame, textvariable=self._priority_var,
+            dn_right, textvariable=self._priority_var,
             values=self.TARGET_PRIORITIES, state="readonly", width=14
         ).grid(row=row, column=1, padx=4, pady=2)
         row += 1
 
-        # 우선순위 설명
         hint = (
             "nearest_center : ROI 중심에서 가장 가까운 적\n"
             "nearest_origin  : ROI 좌상단(0,0) 기준 가까운 적\n"
             "oldest           : 화면에 가장 오래 있던 적\n"
             "newest           : 가장 최근에 나타난 적"
         )
-        ttk.Label(right_frame, text=hint, foreground="gray", justify="left").grid(
+        ttk.Label(dn_right, text=hint, foreground="gray", justify="left").grid(
             row=row, column=0, columnspan=3, sticky="w", padx=4, pady=6
         )
         row += 1
 
-        # ── extra_frame: 드래그 + SceneMotion ────────────────────────
+        # ── 던전 패널: 드래그 + SceneMotion (dn_extra) ────────────────
         erow = 0
-
-        # 드래그 섹션
-        ttk.Label(
-            extra_frame, text="▶ 드래그", font=("", 9, "bold")
-        ).grid(row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4))
+        ttk.Label(dn_extra, text="▶ 드래그", font=("", 9, "bold")).grid(
+            row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4))
         erow += 1
 
         self._drag_enabled = tk.BooleanVar(
             value=bool(self.config.get("pico", {}).get("drag_enabled", False))
         )
-        ttk.Checkbutton(
-            extra_frame, text="드래그 활성화", variable=self._drag_enabled
-        ).grid(row=erow, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Checkbutton(dn_extra, text="드래그 활성화", variable=self._drag_enabled).grid(
+            row=erow, column=0, columnspan=2, sticky="w", pady=2)
         erow += 1
 
         for label, path in self.DRAG_NUM_FIELDS:
-            ttk.Label(extra_frame, text=label).grid(row=erow, column=0, sticky="w", padx=4, pady=2)
+            ttk.Label(dn_extra, text=label).grid(row=erow, column=0, sticky="w", padx=4, pady=2)
             var = tk.StringVar(value=str(self._get(path) or 0))
-            ttk.Entry(extra_frame, textvariable=var, width=10).grid(row=erow, column=1, padx=4, pady=2)
+            ttk.Entry(dn_extra, textvariable=var, width=10).grid(row=erow, column=1, padx=4, pady=2)
             self.drag_vars[label] = (var, path)
             erow += 1
 
@@ -260,35 +337,29 @@ class SettingsWindow:
             "DY > 0 : 아래쪽  DY < 0 : 위쪽\n"
             "Steps : 드래그 중간 단계 수"
         )
-        ttk.Label(extra_frame, text=drag_hint, foreground="gray", justify="left").grid(
-            row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=4
-        )
+        ttk.Label(dn_extra, text=drag_hint, foreground="gray", justify="left").grid(
+            row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=4)
         erow += 1
 
-        # 구분선
-        ttk.Separator(extra_frame, orient="horizontal").grid(
-            row=erow, column=0, columnspan=2, sticky="ew", pady=6
-        )
+        ttk.Separator(dn_extra, orient="horizontal").grid(
+            row=erow, column=0, columnspan=2, sticky="ew", pady=6)
         erow += 1
 
-        # SceneMotion 섹션
-        ttk.Label(
-            extra_frame, text="▶ 이동 감지 필터", font=("", 9, "bold")
-        ).grid(row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4))
+        ttk.Label(dn_extra, text="▶ 이동 감지 필터", font=("", 9, "bold")).grid(
+            row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 4))
         erow += 1
 
         self._scene_enabled = tk.BooleanVar(
             value=bool(self.config.get("scene_motion", {}).get("enabled", True))
         )
-        ttk.Checkbutton(
-            extra_frame, text="이동 중 감지 정지", variable=self._scene_enabled
-        ).grid(row=erow, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Checkbutton(dn_extra, text="이동 중 감지 정지", variable=self._scene_enabled).grid(
+            row=erow, column=0, columnspan=2, sticky="w", pady=2)
         erow += 1
 
         for label, path in self.SCENE_NUM_FIELDS:
-            ttk.Label(extra_frame, text=label).grid(row=erow, column=0, sticky="w", padx=4, pady=2)
+            ttk.Label(dn_extra, text=label).grid(row=erow, column=0, sticky="w", padx=4, pady=2)
             var = tk.StringVar(value=str(self._get(path) or 0))
-            ttk.Entry(extra_frame, textvariable=var, width=10).grid(row=erow, column=1, padx=4, pady=2)
+            ttk.Entry(dn_extra, textvariable=var, width=10).grid(row=erow, column=1, padx=4, pady=2)
             self.scene_vars[label] = (var, path)
             erow += 1
 
@@ -296,15 +367,14 @@ class SettingsWindow:
             "Threshold : 높을수록 둔감 (기본 8.0)\n"
             "Settle    : 정지 후 안정화 대기 프레임"
         )
-        ttk.Label(extra_frame, text=scene_hint, foreground="gray", justify="left").grid(
-            row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=4
-        )
+        ttk.Label(dn_extra, text=scene_hint, foreground="gray", justify="left").grid(
+            row=erow, column=0, columnspan=2, sticky="w", padx=4, pady=4)
         erow += 1
 
-        # ── 자동 레벨링 패널 ──────────────────────────────────────────
-        self._build_auto_panel(auto_frame)
+        # ── 1~10레벨 모드 자동사냥 패널 ──────────────────────────────
+        self._build_auto_panel(lv_auto)
 
-        # ── 상태 표시줄 ───────────────────────────────────────────────
+        # ── 공통 하단 영역 ────────────────────────────────────────────
         self.status_label = ttk.Label(
             bot_frame,
             text="대기 중... | Capture: 0.0 fps | Detection: 0.0 fps | Pico: - | Target: -",
@@ -313,33 +383,82 @@ class SettingsWindow:
         self.status_label.grid(row=0, column=0, columnspan=4, sticky="ew", pady=4)
 
         self.auto_status_label = ttk.Label(
-            bot_frame,
-            text="[AUTO] 대기 중",
-            foreground="gray", anchor="w"
+            bot_frame, text="[AUTO] 대기 중", foreground="gray", anchor="w"
         )
         self.auto_status_label.grid(row=1, column=0, columnspan=4, sticky="ew", pady=2)
 
-        # ── Start / Stop 버튼 ─────────────────────────────────────────
-        ttk.Button(bot_frame, text="▶  Start", command=self.start).grid(
-            row=2, column=0, padx=4, pady=4, sticky="ew"
-        )
-        ttk.Button(bot_frame, text="■  Stop",  command=self.stop).grid(
-            row=2, column=1, padx=4, pady=4, sticky="ew"
-        )
-        ttk.Button(bot_frame, text="🤖 Auto Start", command=self.auto_start).grid(
-            row=2, column=2, padx=4, pady=4, sticky="ew"
-        )
-        ttk.Button(bot_frame, text="⏹ Auto Stop",  command=self.auto_stop).grid(
-            row=2, column=3, padx=4, pady=4, sticky="ew"
-        )
+        # ── 모드별 버튼 영역 ──────────────────────────────────────────
+        # 1~10레벨 모드 버튼
+        self._lv_btn_frame = ttk.Frame(bot_frame)
+        self._lv_btn_frame.grid(row=2, column=0, columnspan=4, sticky="ew")
+
+        ttk.Button(self._lv_btn_frame, text="▶  Start", command=self.start).grid(
+            row=0, column=0, padx=4, pady=4, sticky="ew")
+        ttk.Button(self._lv_btn_frame, text="■  Stop",  command=self.stop).grid(
+            row=0, column=1, padx=4, pady=4, sticky="ew")
+        ttk.Button(self._lv_btn_frame, text="⚔ 레벨링 시작", command=self.auto_start).grid(
+            row=0, column=2, padx=4, pady=4, sticky="ew")
+        ttk.Button(self._lv_btn_frame, text="⏹ 레벨링 중지", command=self.auto_stop).grid(
+            row=0, column=3, padx=4, pady=4, sticky="ew")
+        self._lv_btn_frame.columnconfigure(0, weight=1)
+        self._lv_btn_frame.columnconfigure(1, weight=1)
+        self._lv_btn_frame.columnconfigure(2, weight=1)
+        self._lv_btn_frame.columnconfigure(3, weight=1)
+
+        # 던전 사냥 모드 버튼
+        self._dn_btn_frame = ttk.Frame(bot_frame)
+
+        ttk.Button(self._dn_btn_frame, text="▶  Start", command=self.start).grid(
+            row=0, column=0, padx=4, pady=4, sticky="ew")
+        ttk.Button(self._dn_btn_frame, text="■  Stop",  command=self.stop).grid(
+            row=0, column=1, padx=4, pady=4, sticky="ew")
+        self._dn_btn_frame.columnconfigure(0, weight=1)
+        self._dn_btn_frame.columnconfigure(1, weight=1)
+
+        # 좌표 세팅 도구 (공통)
         ttk.Button(bot_frame, text="📍 좌표 세팅 도구 열기",
                    command=self.open_coord_picker).grid(
-            row=3, column=0, columnspan=4, padx=4, pady=6, sticky="ew"
-        )
+            row=3, column=0, columnspan=4, padx=4, pady=6, sticky="ew")
         bot_frame.columnconfigure(0, weight=1)
         bot_frame.columnconfigure(1, weight=1)
         bot_frame.columnconfigure(2, weight=1)
         bot_frame.columnconfigure(3, weight=1)
+
+        # 초기 모드 적용
+        self._switch_mode("leveling")
+
+    def _switch_mode(self, mode: str):
+        """모드 전환: leveling / dungeon"""
+        self._mode.set(mode)
+
+        if mode == "leveling":
+            # 패널 교체
+            self._dungeon_panel.grid_remove()
+            self._leveling_panel.grid(row=0, column=0, sticky="nsew")
+            # 버튼 교체
+            self._dn_btn_frame.grid_remove()
+            self._lv_btn_frame.grid(row=2, column=0, columnspan=4, sticky="ew")
+            # 버튼 색상
+            self._btn_leveling.config(bg="#2a6ead", relief="sunken")
+            self._btn_dungeon.config(bg="#555555", relief="raised")
+            self._mode_hint.config(
+                text="현재: 1~10레벨 모드  (드래그 자동사냥 → 5렙)",
+                foreground="#2a6ead"
+            )
+        else:
+            # 패널 교체
+            self._leveling_panel.grid_remove()
+            self._dungeon_panel.grid(row=0, column=0, sticky="nsew")
+            # 버튼 교체
+            self._lv_btn_frame.grid_remove()
+            self._dn_btn_frame.grid(row=2, column=0, columnspan=4, sticky="ew")
+            # 버튼 색상
+            self._btn_dungeon.config(bg="#8B2000", relief="sunken")
+            self._btn_leveling.config(bg="#555555", relief="raised")
+            self._mode_hint.config(
+                text="현재: 던전 사냥 모드  (템플릿 매칭 + 자동 공격)",
+                foreground="#8B2000"
+            )
 
     def _build_auto_panel(self, frame):
         """자동 레벨링 설정 패널 (요정 1단계 전용)."""
@@ -624,12 +743,14 @@ class SettingsWindow:
             return
         self._apply_fields_to_config()
         self.stop_event.clear()
+        current_mode = self._mode.get()  # "leveling" or "dungeon"
 
         def worker():
             tracker_main.run(
                 self.config,
                 stop_event=self.stop_event,
                 status_callback=self._on_status,
+                mode=current_mode,
             )
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
@@ -642,16 +763,13 @@ class SettingsWindow:
             self._hunting_sm = None
 
     def auto_start(self):
-        """자동 레벨링 시작 (tracker가 실행 중이어야 함)."""
-        if not (self.worker_thread and self.worker_thread.is_alive()):
-            messagebox.showwarning("경고", "먼저 ▶ Start로 트래커를 실행하세요.")
-            return
+        """1~10레벨 자동사냥 시작."""
         self._apply_auto_fields_to_config()
 
-        # HuntingStateMachine을 main 루프 외부에서 접근할 방법이 없으므로
-        # automation_config를 갱신하고 트래커를 재시작
-        self.stop_event.set()
-        import time; time.sleep(0.5)
+        # 실행 중이면 재시작
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.stop_event.set()
+            import time; time.sleep(0.5)
 
         self._apply_fields_to_config()
         self.stop_event.clear()
@@ -662,6 +780,7 @@ class SettingsWindow:
                 stop_event=self.stop_event,
                 status_callback=self._on_status,
                 automation_config=self.automation_config,
+                mode="leveling",
             )
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)

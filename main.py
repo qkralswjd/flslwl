@@ -90,17 +90,23 @@ def _build_pico_worker(pico_cfg: dict):
     return worker
 
 
-def run(config, stop_event=None, status_callback=None, automation_config=None):
-    """Runs the capture/detect/track/overlay loop until 'q' is pressed or stop_event is set."""
+def run(config, stop_event=None, status_callback=None, automation_config=None, mode="dungeon"):
+    """Runs the capture/detect/track/overlay loop until 'q' is pressed or stop_event is set.
 
-    # ── HuntingStateMachine 초기화 (자동 레벨링) ──────────────────────
+    Args:
+        mode: "leveling" → 1~10레벨 자동사냥 (드래그, HuntingStateMachine ON, 템플릿매칭 OFF)
+              "dungeon"  → 던전 사냥 모드 (템플릿매칭 ON, HuntingStateMachine OFF)
+    """
+    is_leveling = (mode == "leveling")
+    logger.info(f"=== 실행 모드: {'⚔ 1~10레벨 모드' if is_leveling else '🏰 던전 사냥 모드'} ===")
+
+    # ── HuntingStateMachine 초기화 (레벨링 모드만) ────────────────────
     hunting_sm = None
-    if automation_config is not None:
+    if is_leveling and automation_config is not None:
         try:
             from automation.state_machine import HuntingStateMachine
-            # capturer가 아직 없으므로 나중에 grab 함수 주입 (아래에서 처리)
             _hunting_sm_config   = automation_config
-            _hunting_sm_pending  = True   # capturer 생성 후 초기화 예정
+            _hunting_sm_pending  = True
         except ImportError as e:
             logger.warning(f"[Automation] automation 모듈 로드 실패: {e}")
             _hunting_sm_pending  = False
@@ -197,6 +203,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None):
     )
 
     clf_config = config.get("classifier", {})
+    # 레벨링 모드에서는 템플릿 매칭 OFF
     classifier = (
         MonsterClassifier(
             clf_config.get("templates_dir") or get_templates_dir(),
@@ -206,9 +213,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None):
             excluded_color_ratio=clf_config.get("excluded_color_ratio", 0.2),
             min_size_ratio=clf_config.get("min_size_ratio", 0.6),
         )
-        if clf_config.get("enabled")
+        if (clf_config.get("enabled") and not is_leveling)
         else None
     )
+    if is_leveling:
+        logger.info("[Mode] 레벨링 모드: 템플릿 매칭 비활성화")
 
     debug_view = (
         DebugView(motion_detector, contour_detector, WINDOW_NAME, classifier=classifier)
