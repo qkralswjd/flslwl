@@ -247,7 +247,7 @@ class PicoSerialWorker:
         max_iters: int = MAX_CORRECTION_ITERS,
     ) -> bool:
         """폐루프 절대 좌표 이동 (GetCursorPos + 댐핑 보정)."""
-        for _ in range(max_iters):
+        for i in range(max_iters):
             try:
                 cur_x, cur_y = _get_cursor_pos()
             except Exception as exc:
@@ -255,13 +255,17 @@ class PicoSerialWorker:
                 return False
             dx = target_x - cur_x
             dy = target_y - cur_y
+            self._on_log("DEBUG", f"_move_to iter={i} cur=({cur_x},{cur_y}) target=({target_x},{target_y}) dx={dx} dy={dy}")
             if abs(dx) <= tolerance and abs(dy) <= tolerance:
+                self._on_log("DEBUG", f"_move_to 수렴 → ({target_x},{target_y})")
                 return True
             send_dx = round(dx * CORRECTION_DAMPING) or (1 if dx > 0 else -1)
             send_dy = round(dy * CORRECTION_DAMPING) or (1 if dy > 0 else -1)
             self._write_line(f"MOVE:{send_dx}:{send_dy}")
-            self._wait_for_ack("OK:MOVE", "ERR:MOVE")
+            ack = self._wait_for_ack("OK:MOVE", "ERR:MOVE")
+            self._on_log("DEBUG", f"_move_to MOVE ACK={ack}")
             time.sleep(0.02)
+        self._on_log("ERROR", f"_move_to 미수렴: target=({target_x},{target_y})")
         return False
 
     def _do_move_click(self, target_x: int, target_y: int, pulse_ms: int) -> None:
