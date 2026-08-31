@@ -1,0 +1,114 @@
+{
+    "_comment": "요정 1단계 자동 레벨링 설정 파일. 좌표는 모두 절대 화면 좌표 기준입니다.",
+    "capture_offset": {
+        "_comment": "config.json의 capture_region x,y 값과 동일하게 설정",
+        "x": 240,
+        "y": 0
+    },
+    "roi_offset": {
+        "_comment": "config.json의 roi x,y 값과 동일하게 설정",
+        "x": 0,
+        "y": 0
+    },
+    "keys": {
+        "_comment": "사용할 단축키 설정 (F5~F9 기본값)",
+        "potion": "F5",
+        "scroll": "F6",
+        "tp_book": "F7",
+        "return_book": "F8",
+        "speed_potion": "F9",
+        "potion_cooldown_ms": 3000
+    },
+    "hp_bar": {
+        "_comment": "HP 바 영역 (절대 화면 기준). HSV 빨간색 픽셀 비율로 HP% 계산",
+        "region": {
+            "_comment": "HP 바가 표시되는 영역. coordinate_picker.py로 직접 지정 예정",
+            "x": 0,
+            "y": 0,
+            "width": 200,
+            "height": 10
+        },
+        "threshold_pct": 50.0,
+        "read_interval_s": 0.5
+    },
+    "level_ocr": {
+        "_comment": "레벨 표시 영역 (절대 화면 기준). 'Lv.5' 형식 인식",
+        "region": {
+            "_comment": "레벨 숫자가 보이는 영역. coordinate_picker.py로 직접 지정 예정",
+            "x": 0,
+            "y": 0,
+            "width": 80,
+            "height": 25
+        },
+        "read_interval_s": 2.0,
+        "target_level_dummy": 5,
+        "target_level_hunt": 10
+    },
+    "scroll_dummy": {
+        "_comment": "F6 말하는 두루마리 → 허수아비 수련장 텔레포트 설정",
+        "destination_region": {
+            "_comment": "텔레포트 목적지 창이 뜨는 영역 (절대 화면 기준). coordinate_picker.py로 지정 예정",
+            "x": 400,
+            "y": 150,
+            "width": 300,
+            "height": 400
+        },
+        "destination_text": "허수아비",
+        "wait_after_key_ms": 800,
+        "wait_after_click_ms": 3000
+    },
+    "dummy": {
+        "_comment": "허수아비 공격 좌표 (절대 화면 기준)",
+        "attack_coord": {
+            "x": -1372,
+            "y": 840,
+            "width": 332,
+            "height": 53
+        },
+        "attack_interval_ms": 500,
+        "move_timeout_ms": 3000
+    },
+    "hunt_waypoints": {
+        "_comment": "Lv.5 달성 후 이동할 사냥터 웨이포인트 (절대 화면 기준). 순환 이동",
+        "points": [
+            {
+                "_comment": "사냥터 구역 좌표. coordinate_picker.py로 직접 지정 예정",
+                "x": 960,
+                "y": 400,
+                "label": "사냥터-A",
+                "wait_ms": 2000
+            },
+            {
+                "x": 800,
+                "y": 400,
+                "label": "사냥터-B",
+                "wait_ms": 2000
+            },
+            {
+                "x": 700,
+                "y": 500,
+                "label": "사냥터-C",
+                "wait_ms": 2000
+            }
+        ],
+        "move_timeout_ms": 5000
+    },
+    "loot": {
+        "_comment": "아데나 줍기 설정",
+        "scan_region": {
+            "_comment": "아데나 텍스트 탐색 영역 (절대 화면 기준)",
+            "x": 0,
+            "y": 0,
+            "width": 1440,
+            "height": 780
+        },
+        "keywords": [
+            "아데나",
+            "Adena",
+            "adena"
+        ],
+        "scan_interval_s": 0.5,
+        "click_interval_ms": 400,
+        "timeout_ms": 3000
+    }
+}

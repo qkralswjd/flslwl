@@ -1,0 +1,84 @@
+{
+    "monitor_index": 1,
+    "capture_region": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+    },
+    "roi": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+    },
+    "capture_fps": 60,
+    "detection_fps": 12,
+    "motion": {
+        "history": 200,
+        "var_threshold": 16,
+        "detect_shadows": false
+    },
+    "classifier": {
+        "enabled": true,
+        "templates_dir": "config/templates",
+        "reject_templates_dir": "config/templates_reject",
+        "confidence_threshold": 0.5,
+        "excluded_color_ranges": [
+            {
+                "name": "blue",
+                "h_min": 95,
+                "h_max": 135,
+                "s_min": 60,
+                "v_min": 60
+            },
+            {
+                "name": "pink_red",
+                "h_min": 145,
+                "h_max": 10,
+                "s_min": 60,
+                "v_min": 60
+            }
+        ],
+        "excluded_color_ratio": 0.2,
+        "min_size_ratio": 0.6
+    },
+    "blur_kernel": 5,
+    "morph_kernel": 5,
+    "min_area": 100,
+    "max_area": 50000,
+    "max_missing_frames": 10,
+    "max_match_distance": 100,
+    "show_debug": true,
+    "pico": {
+        "enabled": true,
+        "serial_port": "COM4",
+        "baudrate": 115200,
+        "click_pulse_ms": 20,
+        "click_offset_x": 0,
+        "click_offset_y": 0,
+        "lock_confirm_frames": 2,
+        "wait_dead_timeout_ms": 5000,
+        "next_target_cooldown_ms": 300,
+        "target_priority": "nearest_center",
+        "drag_enabled": true,
+        "drag_dx": 80,
+        "drag_dy": 0,
+        "drag_steps": 8
+    },
+    "scene_motion": {
+        "enabled": true,
+        "scene_threshold": 12.0,
+        "settle_frames": 5,
+        "downscale": 4,
+        "crop_ratio": 0.6,
+        "move_confirm_frames": 2
+    },
+    "detection_zone": {
+        "enabled": true,
+        "center_x": 960,
+        "center_y": 540,
+        "half_width": 600,
+        "half_height": 400
+    }
+}
