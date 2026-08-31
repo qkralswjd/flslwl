@@ -136,12 +136,14 @@ class WaypointMover:
     # ── 내부 헬퍼 ────────────────────────────────────────────────────
 
     def _move_to_current(self, pico_worker, now: float) -> None:
-        wp   = self.waypoints[self._idx]
-        ax   = wp["x"] + self.capture_offset[0]
-        ay   = wp["y"] + self.capture_offset[1]
+        wp    = self.waypoints[self._idx]
+        ax    = wp["x"] + self.capture_offset[0]
+        ay    = wp["y"] + self.capture_offset[1]
         label = wp.get("label", f"WP{self._idx}")
-        logger.info(f"[WaypointMover] → '{label}' ({ax},{ay})")
-        pico_worker.click(ax, ay, self.click_pulse_ms)
+        clicks = wp.get("clicks", 1)
+        logger.info(f"[WaypointMover] → '{label}' ({ax},{ay}) x{clicks}")
+        for _ in range(clicks):
+            pico_worker.click(ax, ay, self.click_pulse_ms)
         self._move_start_t = now
         self._state = "MOVING"
 
