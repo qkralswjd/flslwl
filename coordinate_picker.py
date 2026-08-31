@@ -76,14 +76,16 @@ def get_cursor_pos() -> tuple[int, int]:
 # ── config 키 매핑 ────────────────────────────────────────────────────
 # (표시이름) → (config 최상위 키, 하위 키)
 CONFIG_KEY_MAP = {
-    "HP 바 영역":           ("hp_bar",       "region"),
-    "레벨 OCR 영역":        ("level_ocr",    "region"),
-    "두루마리 목적지 창":   ("scroll_dummy", "destination_region"),
-    "허수아비 공격 좌표":   ("dummy",        "attack_coord"),
-    "사냥터 웨이포인트 추가": ("hunt_waypoints", "points"),   # 특수 처리
-    "아데나 스캔 영역":     ("loot",         "scan_region"),
-    "캡처 오프셋":          ("capture_offset", None),
-    "기타 (저장만)":        (None,           None),
+    "HP 바 영역":              ("hp_bar",       "region"),
+    "레벨 OCR 영역":           ("level_ocr",    "region"),
+    "두루마리 목적지 창":      ("scroll_dummy", "destination_region"),
+    "허수아비 drag_from":      ("dummy",        "drag_from"),   # 드래그 시작점
+    "허수아비 drag_to":        ("dummy",        "drag_to"),     # 드래그 끝점(허수아비)
+    "허수아비 공격 좌표":      ("dummy",        "attack_coord"),
+    "사냥터 웨이포인트 추가":  ("hunt_waypoints", "points"),    # 특수 처리
+    "아데나 스캔 영역":        ("loot",         "scan_region"),
+    "캡처 오프셋":             ("capture_offset", None),
+    "기타 (저장만)":           (None,           None),
 }
 
 
