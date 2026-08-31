@@ -173,6 +173,7 @@ class HuntingStateMachine:
         self._dummy_move_done    = False
         self._dummy_move_start   = 0.0
         self._last_dummy_atk     = 0.0
+        self._dummy_drag_done    = False  # 드래그 1회만 실행
 
         # ── 사냥터 웨이포인트 무버 ─────────────────────────────────────
         hwp_cfg   = config.get("hunt_waypoints", {})
@@ -406,16 +407,16 @@ class HuntingStateMachine:
             self._enter(HuntingState.USE_SPEED_POTION)
             return
 
-        # 주기적 드래그 공격 (마우스 누른 채 드래그 → 놓기)
-        if now - self._last_dummy_atk >= self.dummy_atk_interval:
+        # 드래그 공격 1회만 실행 (게임이 자동 반복하므로 1번이면 충분)
+        if not self._dummy_drag_done:
             fx, fy = self.dummy_drag_from
             tx, ty = self.dummy_drag_to
             self.pico.drag(fx, fy, tx, ty, self.dummy_drag_steps)
-            self._last_dummy_atk = now
+            self._dummy_drag_done = True
             elapsed = int(now - self._entered_at)
             lv_str = str(level) if level is not None else "?"
             logger.info(
-                f"[HuntingSM][DUMMY] 드래그 공격 ({fx},{fy})→({tx},{ty}) "
+                f"[HuntingSM][DUMMY] 드래그 공격 1회 실행 ({fx},{fy})→({tx},{ty}) "
                 f"Lv={lv_str}/{self.target_level_dummy} 경과={elapsed}s"
             )
 
