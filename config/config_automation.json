@@ -2,7 +2,7 @@
     "_comment": "요정 1단계 자동 레벨링 설정 파일. 좌표는 모두 절대 화면 좌표 기준입니다.",
     "capture_offset": {
         "_comment": "config.json의 capture_region x,y 값과 동일하게 설정",
-        "x": 240,
+        "x": 0,
         "y": 0
     },
     "roi_offset": {
