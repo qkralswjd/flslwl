@@ -65,9 +65,9 @@ def _parse_level(text: str) -> Optional[int]:
     """
     text_stripped = text.strip()
 
-    # ── 1) LEV: 또는 LEV. 또는 LEV 숫자 형식 (대소문자 무관) ──────────────────
-    #    예: "LEV:14", "Lev:5", "LEV.14", "LEV 14", "LEV14"
-    m = re.search(r"[Ll][Ee][Vv][:.\s]?\s*(\d+)", text_stripped)
+    # ── 1) LEV / LEC / LEU 계열 (OCR 오인식 포함, 대소문자 무관) ──────────────
+    #    예: "LEV:14", "Lev:5", "LEC:14" (V→C 오인식), "LEU:14" (V→U 오인식)
+    m = re.search(r"[Ll][Ee][VvCcUu][: .]*?(\d+)", text_stripped)
     if m:
         return int(m.group(1))
 
@@ -153,7 +153,7 @@ class LevelReader:
 
         # 결과 파싱
         for (_, text, confidence) in results:
-            if confidence < 0.3:
+            if confidence < 0.1:   # 임계값 완화 (LEV:14 OCR 신뢰도 낮음)
                 continue
             level = _parse_level(text)
             if level is not None:
