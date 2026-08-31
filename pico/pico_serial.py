@@ -195,11 +195,13 @@ class PicoSerialWorker:
                 try:
                     while True:
                         cmd = self._out_queue.get_nowait()
+                        self._on_log("DEBUG", f"큐 꺼냄: {cmd}")
                         if cmd.startswith("__MOVECLICK__:"):
                             _, x_s, y_s, pulse_s = cmd.split(":")
                             self._do_move_click(int(x_s), int(y_s), int(pulse_s))
                         elif cmd.startswith("__DRAG__:"):
                             _, fx_s, fy_s, tx_s, ty_s, steps_s = cmd.split(":")
+                            self._on_log("DEBUG", f"_do_drag 시작: ({fx_s},{fy_s})→({tx_s},{ty_s}) steps={steps_s}")
                             self._do_drag(int(fx_s), int(fy_s), int(tx_s), int(ty_s), int(steps_s))
                         elif cmd.startswith("__KEYTAP__:"):
                             _, kc_s, hold_s = cmd.split(":")

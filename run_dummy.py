@@ -105,6 +105,7 @@ def main():
     logger.info("=" * 50)
 
     # ── 메인 루프 ──────────────────────────────────────────────────────
+    _diag_counter = 0
     try:
         while True:
             frame = capturer.grab()
@@ -112,6 +113,14 @@ def main():
 
             status = sm.get_status()
             state  = status.get("state", "?")
+
+            # 3초마다 Pico 스레드 상태 출력
+            _diag_counter += 1
+            if _diag_counter % 60 == 0 and pico_enabled:
+                alive = pico._thread.is_alive() if pico._thread else False
+                qsize = pico._out_queue.qsize()
+                conn  = pico.is_connected
+                logger.info(f"  [DIAG] thread_alive={alive} queue={qsize} is_connected={conn}")
 
             # 완료 또는 IDLE(오류) 감지
             if state in ("DONE_PHASE1", "IDLE"):
