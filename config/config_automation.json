@@ -22,11 +22,10 @@
     "hp_bar": {
         "_comment": "HP 바 영역 (절대 화면 기준). HSV 빨간색 픽셀 비율로 HP% 계산",
         "region": {
-            "_comment": "HP 바가 표시되는 영역. coordinate_picker.py로 직접 지정 예정",
-            "x": 0,
-            "y": 0,
-            "width": 200,
-            "height": 10
+            "x": 551,
+            "y": 830,
+            "width": 331,
+            "height": 61
         },
         "threshold_pct": 50.0,
         "read_interval_s": 0.5
@@ -34,11 +33,10 @@
     "level_ocr": {
         "_comment": "레벨 표시 영역 (절대 화면 기준). 'Lv.5' 형식 인식",
         "region": {
-            "_comment": "레벨 숫자가 보이는 영역. coordinate_picker.py로 직접 지정 예정",
-            "x": 0,
-            "y": 0,
-            "width": 80,
-            "height": 25
+            "x": 238,
+            "y": 863,
+            "width": 109,
+            "height": 30
         },
         "read_interval_s": 2.0,
         "target_level_dummy": 5,
