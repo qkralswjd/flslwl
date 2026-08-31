@@ -37,7 +37,7 @@ import serial.tools.list_ports
 logger = logging.getLogger("pico_serial")
 
 PING_INTERVAL_S  = 1.0
-PONG_TIMEOUT_S   = 3.0
+PONG_TIMEOUT_S   = 30.0  # _do_drag 최대 실행시간(~6.4s) 대응 (기존 3.0에서 상향)
 ACK_TIMEOUT_S    = 0.3
 
 CORRECTION_TOLERANCE_PX = 4
