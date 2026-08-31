@@ -57,6 +57,9 @@ from automation.waypoint_mover import WaypointMover
 
 logger = logging.getLogger("hunting_sm")
 
+# 텔레포트 최대 재시도 횟수: 이 횟수 초과 시 IDLE로 전환해 안전 정지
+MAX_TELEPORT_RETRY = 5
+
 
 class HuntingState(Enum):
     IDLE               = auto()   # 시작 전
@@ -210,8 +213,9 @@ class HuntingStateMachine:
         self._speed_potion_wait   = 1.0   # F9 후 대기 시간 (초)
         self._speed_potion_sent_at = 0.0  # F9 키 입력 시각 (비블로킹 대기용)
 
-        # ── 텔레포트 재시도 타임스탬프 (비블로킹) ─────────────────────
+        # ── 텔레포트 재시도 제어 (비블로킹) ──────────────────────────────
         self._teleport_retry_at   = 0.0   # 이 시각 전에는 재시도 안 함
+        self._teleport_fail_count = 0     # 연속 실패 횟수 (MAX_TELEPORT_RETRY 도달 시 IDLE)
 
         # ── 통계 ──────────────────────────────────────────────────────
         self.kills       = 0
@@ -302,16 +306,30 @@ class HuntingStateMachine:
 
         if result is True:
             logger.info("[HuntingSM] 텔레포트 성공 -> 허수아비 이동 시작")
+            self._teleport_fail_count = 0   # 성공 시 카운터 초기화
             self._dummy_move_done = False
             self._enter(HuntingState.MOVE_TO_DUMMY)   # _enter에서 retry_at 리셋
 
         elif result is False:
-            # 최대 재시도 소진 -> 2초 후 전체 재시도
-            self._teleport_retry_at = now + 2.0
+            self._teleport_fail_count += 1
             self.scroll_teleporter.reset()   # tick 단계 초기화
-            logger.warning(
-                "[HuntingSM] 텔레포트 실패 -- 2초 후 재시도 (비블로킹)"
-            )
+
+            if self._teleport_fail_count >= MAX_TELEPORT_RETRY:
+                # 최대 재시도 횟수 초과 -> 안전 상태(IDLE)로 전환
+                logger.error(
+                    f"[RECOVERY] TELEPORT_FAIL | "
+                    f"attempt={self._teleport_fail_count}/{MAX_TELEPORT_RETRY} | "
+                    f"next=IDLE -- 텔레포트 포기, 자동사냥 정지"
+                )
+                self._enter(HuntingState.IDLE)   # _enter에서 fail_count/retry_at 리셋
+            else:
+                # 아직 재시도 가능 -> 2초 후 재시도 (비블로킹)
+                self._teleport_retry_at = now + 2.0
+                logger.warning(
+                    f"[HuntingSM] 텔레포트 실패 "
+                    f"({self._teleport_fail_count}/{MAX_TELEPORT_RETRY}) "
+                    f"-- 2초 후 재시도 (비블로킹)"
+                )
         # result is None: 진행 중, 다음 tick까지 대기
 
     def _update_move_to_dummy(self) -> None:
@@ -503,6 +521,9 @@ class HuntingStateMachine:
         if new_state == HuntingState.USE_SCROLL_DUMMY:
             self.scroll_teleporter.reset()
         self._teleport_retry_at = 0.0
+        # IDLE 전환(stop/복구): fail_count 리셋 (다음 start() 때 깨끗하게 시작)
+        if new_state == HuntingState.IDLE:
+            self._teleport_fail_count = 0
 
     # ── 상태 조회 API ─────────────────────────────────────────────────────
 
