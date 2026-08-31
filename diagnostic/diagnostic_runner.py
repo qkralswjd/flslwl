@@ -87,8 +87,8 @@ def _draw_overlay(
     # ── Enemy bounding boxes ─────────────────────────────────────────────────
     current_id = tracker.current_target_id
     for e in enemies:
-        # Enemy.bbox = (x, y, w, h) in ROI 좌표
-        bx, by, bw, bh = e.bbox
+        # Enemy 속성: x, y, width, height (ROI 좌표 기준)
+        bx, by, bw, bh = e.x, e.y, e.width, e.height
         sx, sy = bx + ox, by + oy
         color = _COLOR_TARGET if e.id == current_id else _COLOR_ENEMY
         cv2.rectangle(out, (sx, sy), (sx + bw, sy + bh), color, 2)
