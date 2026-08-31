@@ -140,9 +140,12 @@ class WaypointMover:
         ax    = wp["x"] + self.capture_offset[0]
         ay    = wp["y"] + self.capture_offset[1]
         label = wp.get("label", f"WP{self._idx}")
-        clicks = wp.get("clicks", 1)
-        logger.info(f"[WaypointMover] → '{label}' ({ax},{ay}) x{clicks}")
-        for _ in range(clicks):
+        clicks      = wp.get("clicks", 1)
+        click_delay = wp.get("click_delay_ms", 0) / 1000.0
+        logger.info(f"[WaypointMover] → '{label}' ({ax},{ay}) x{clicks} delay={click_delay:.1f}s")
+        for i in range(clicks):
+            if i > 0 and click_delay > 0:
+                time.sleep(click_delay)
             pico_worker.click(ax, ay, self.click_pulse_ms)
         self._move_start_t = now
         self._state = "MOVING"
