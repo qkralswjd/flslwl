@@ -8,9 +8,9 @@ import numpy as np
 
 def main():
     # config 로드
-    with open("config/config.json") as f:
+    with open("config/config.json", encoding="utf-8") as f:
         cfg = json.load(f)
-    with open("config/config_automation.json") as f:
+    with open("config/config_automation.json", encoding="utf-8") as f:
         auto = json.load(f)
 
     region = auto["level_ocr"]["region"]
