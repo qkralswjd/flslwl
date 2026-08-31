@@ -62,9 +62,15 @@ def main():
             from pico.pico_serial import PicoSerialWorker
             port     = pico_cfg.get("port", "COM3")
             baudrate = pico_cfg.get("baudrate", 115200)
-            pico     = PicoSerialWorker(port=port, baudrate=baudrate)
+            pico     = PicoSerialWorker(
+                port=port,
+                baudrate=baudrate,
+                on_log=lambda lv, msg: logger.info(f"  [Pico/{lv}] {msg}"),
+                on_command_result=lambda cmd, ok: logger.info(f"  [Pico] {cmd} → {'OK' if ok else 'FAIL'}"),
+            )
             pico.start()
-            logger.info(f"  Pico 연결: {port} @ {baudrate}")
+            time.sleep(1.0)   # 연결 안정화 대기
+            logger.info(f"  Pico 연결: {port} @ {baudrate}  is_connected={pico.is_connected}")
         except Exception as e:
             logger.warning(f"  Pico 연결 실패: {e} → NullPicoWorker 사용")
             from pico.null_pico import NullPicoWorker
