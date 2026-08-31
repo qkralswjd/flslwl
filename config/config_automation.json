@@ -74,7 +74,7 @@
         "_comment": "Lv.5 달성 후 사냥터까지 순차 클릭 이동. 클릭 후 move_timeout_ms 경과하면 도착 간주 → 다음 이동",
         "move_timeout_ms": 8000,
         "points": [
-            {"x": 993,  "y": 701, "label": "1차이동",       "wait_ms": 500, "clicks": 2},
+            {"x": 993,  "y": 701, "label": "1차이동",       "wait_ms": 500, "clicks": 2, "click_delay_ms": 2000},
             {"x": 294,  "y": 590, "label": "2차이동",       "wait_ms": 500},
             {"x": 898,  "y": 761, "label": "3차이동",       "wait_ms": 500},
             {"x": 1192, "y": 802, "label": "4차이동",       "wait_ms": 500},
