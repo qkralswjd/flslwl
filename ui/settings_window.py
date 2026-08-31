@@ -848,12 +848,15 @@ class SettingsWindow:
 
     def open_coord_picker(self):
         """좌표 세팅 도구를 별도 창으로 엽니다."""
-        import subprocess, sys
-        picker_path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "..", "coordinate_picker.py"
+        import subprocess
+        picker_path = os.path.normpath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "coordinate_picker.py")
         )
-        picker_path = os.path.normpath(picker_path)
-        subprocess.Popen([sys.executable, picker_path])
+        # py -3.11 우선, 없으면 현재 인터프리터 fallback
+        try:
+            subprocess.Popen(["py", "-3.11", picker_path])
+        except FileNotFoundError:
+            subprocess.Popen([sys.executable, picker_path])
 
     def _on_close(self):
         self.stop_event.set()
