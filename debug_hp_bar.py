@@ -76,8 +76,8 @@ print(f"crop shape: {crop.shape}")
 hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
 
 HP_HSV_RANGES = [
-    ((0,  100, 80), (10, 255, 255)),
-    ((170, 100, 80), (180, 255, 255)),
+    # 파란색 영역 (H=95~135, S=80+, V=60+)
+    ((95, 80, 60), (135, 255, 255)),
 ]
 
 mask = np.zeros(hsv.shape[:2], dtype=np.uint8)

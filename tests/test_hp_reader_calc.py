@@ -1,10 +1,12 @@
 """HpReader._calc_hp_pct() 단위 테스트.
 
 가로 방향 연속 채우기 로직 검증:
-- HP 100% → 전체 열이 빨간색
-- HP 50%  → 왼쪽 절반만 빨간색
-- HP 0%   → 빨간 픽셀 없음
-- 테두리 포함 케이스 (위아래 1px 테두리 = 비빨간 행)
+- HP 100% → 전체 열이 파란색
+- HP 50%  → 왼쪽 절반만 파란색
+- HP 0%   → 파란 픽셀 없음
+- 테두리 포함 케이스 (위아래 1px 테두리 = 비파란 행)
+
+리니지 클래식 HP 바는 파란색(royal blue, BGR≈(220,80,30)) 계열.
 """
 
 import numpy as np
@@ -15,12 +17,16 @@ from automation.hp_reader import _calc_hp_pct
 # ─── 헬퍼 ───────────────────────────────────────────────────────────────────
 
 
+# 리니지 클래식 HP 바 파란색 (BGR: B=220, G=80, R=30 → HSV H≈110)
+_BLUE_BGR = (220, 80, 30)
+
+
 def _make_bar(width: int, height: int, filled_ratio: float) -> np.ndarray:
-    """왼쪽 filled_ratio 비율만큼 빨간색(BGR=0,0,220)으로 채운 이미지 반환."""
+    """왼쪽 filled_ratio 비율만큼 파란색(BGR≈220,80,30)으로 채운 이미지 반환."""
     img = np.zeros((height, width, 3), dtype=np.uint8)
     filled_cols = int(round(width * filled_ratio))
     if filled_cols > 0:
-        img[:, :filled_cols] = (0, 0, 220)  # BGR 빨간색
+        img[:, :filled_cols] = _BLUE_BGR
     return img
 
 
@@ -30,8 +36,8 @@ def _make_bar_with_border(width: int, inner_height: int, filled_ratio: float) ->
     img = np.zeros((total_height, width, 3), dtype=np.uint8)
     filled_cols = int(round(width * filled_ratio))
     if filled_cols > 0:
-        # 내부 행(1 ~ inner_height)만 빨간색
-        img[1:1 + inner_height, :filled_cols] = (0, 0, 220)
+        # 내부 행(1 ~ inner_height)만 파란색
+        img[1:1 + inner_height, :filled_cols] = _BLUE_BGR
     return img
 
 
@@ -103,9 +109,9 @@ def test_old_pixel_ratio_bug_100pct():
     bar_h = 26  # 실제 HP 바 높이
 
     img = np.zeros((total_h, width, 3), dtype=np.uint8)
-    # HP 100%: 전체 열을 빨간색으로 채우되 높이는 bar_h만
+    # HP 100%: 전체 열을 파란색으로 채우되 높이는 bar_h만
     top = (total_h - bar_h) // 2
-    img[top:top + bar_h, :] = (0, 0, 220)
+    img[top:top + bar_h, :] = _BLUE_BGR
 
     result = _calc_hp_pct(img)
     # 새 로직: 가로 방향으로 모든 열이 채워짐 → 100%
@@ -123,7 +129,7 @@ def test_old_pixel_ratio_bug_50pct():
     bar_h = 10  # 절반 높이
 
     img = np.zeros((total_h, width, 3), dtype=np.uint8)
-    img[5:15, :] = (0, 0, 220)  # 가운데 10px 행에 HP 바
+    img[5:15, :] = _BLUE_BGR  # 가운데 10px 행에 HP 바
 
     result = _calc_hp_pct(img)
     assert result == 100.0, f"예상 100.0, 실제 {result}"
@@ -138,9 +144,9 @@ def test_empty_image():
     assert _calc_hp_pct(img) == 100.0
 
 
-def test_single_pixel_red():
-    """1×1 빨간 픽셀 → 100%."""
-    img = np.array([[[0, 0, 220]]], dtype=np.uint8)
+def test_single_pixel_blue():
+    """1×1 파란 픽셀 → 100%."""
+    img = np.array([[list(_BLUE_BGR)]], dtype=np.uint8)
     assert _calc_hp_pct(img) == 100.0
 
 
