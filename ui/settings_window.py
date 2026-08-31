@@ -450,15 +450,18 @@ class SettingsWindow:
             row=arow, column=0, columnspan=2, sticky="ew", pady=4)
         arow += 1
 
-        # ── 허수아비 공격 ─────────────────────────────────────────────
+        # ── 허수아비 드래그 공격 ──────────────────────────────────────
         ttk.Label(frame, text="▶ 허수아비 공격", font=("",9,"bold")).grid(
             row=arow, column=0, columnspan=2, sticky="w", padx=4, pady=(0,2))
         arow += 1
 
         for label, keys, default in [
-            ("허수아비 X",  ("dummy","attack_coord","x"),  "960"),
-            ("허수아비 Y",  ("dummy","attack_coord","y"),  "540"),
-            ("공격 간격ms", ("dummy","attack_interval_ms"), "500"),
+            ("드래그 시작 X", ("dummy","drag_from","x"), "960"),
+            ("드래그 시작 Y", ("dummy","drag_from","y"), "600"),
+            ("드래그 끝 X",   ("dummy","drag_to","x"),   "960"),
+            ("드래그 끝 Y",   ("dummy","drag_to","y"),   "400"),
+            ("드래그 단계",   ("dummy","drag_steps"),    "8"),
+            ("공격 간격ms",   ("dummy","attack_interval_ms"), "500"),
         ]:
             ttk.Label(frame, text=label).grid(row=arow, column=0, sticky="w", padx=4, pady=1)
             node = ac

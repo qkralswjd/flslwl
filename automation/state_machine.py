@@ -158,11 +158,13 @@ class HuntingStateMachine:
             wait_after_click_ms = sd_cfg.get("wait_after_click_ms", 3000),
         )
 
-        # ── 허수아비 공격 설정 ─────────────────────────────────────────
+        # ── 허수아비 드래그 공격 설정 ──────────────────────────────────
         dummy_cfg = config.get("dummy", {})
-        dummy_coord_cfg          = dummy_cfg.get("attack_coord", {"x": 960, "y": 540})
-        self.dummy_coord         = (dummy_coord_cfg.get("x", 960),
-                                   dummy_coord_cfg.get("y", 540))
+        drag_from_cfg            = dummy_cfg.get("drag_from", {"x": 960, "y": 600})
+        drag_to_cfg              = dummy_cfg.get("drag_to",   {"x": 960, "y": 400})
+        self.dummy_drag_from     = (drag_from_cfg.get("x", 960), drag_from_cfg.get("y", 600))
+        self.dummy_drag_to       = (drag_to_cfg.get("x",   960), drag_to_cfg.get("y",   400))
+        self.dummy_drag_steps    = dummy_cfg.get("drag_steps", 8)
         self.dummy_atk_interval  = dummy_cfg.get("attack_interval_ms", 500) / 1000.0
         self.dummy_move_timeout  = dummy_cfg.get("move_timeout_ms", 3000) / 1000.0
         self._dummy_move_done    = False
@@ -295,25 +297,23 @@ class HuntingStateMachine:
             # 상태 유지 → 다음 tick에 재시도
 
     def _update_move_to_dummy(self) -> None:
-        """허수아비 좌표로 이동 (Pico 클릭 1회 후 타임아웃으로 도착 판정)."""
+        """허수아비 방향으로 드래그 준비 (이동 없이 바로 공격 시작)."""
         now = time.time()
 
         if not self._dummy_move_done:
-            ax, ay = self.dummy_coord
-            logger.info(f"[HuntingSM] 허수아비 위치로 클릭 이동: ({ax},{ay})")
-            self.pico.click(ax, ay)
+            fx, fy = self.dummy_drag_from
+            tx, ty = self.dummy_drag_to
+            logger.info(f"[HuntingSM] 허수아비 도착 → 드래그 공격 시작: ({fx},{fy})→({tx},{ty})")
             self._dummy_move_start = now
             self._dummy_move_done  = True
-            return
 
-        # 이동 타임아웃 경과 → 도착으로 간주
-        if now - self._dummy_move_start >= self.dummy_move_timeout:
-            logger.info("[HuntingSM] 허수아비 도착 → 공격 시작")
+        # 짧은 대기 후 바로 공격 상태로 전환
+        if now - self._dummy_move_start >= 0.5:
             self._dummy_move_done = False
             self._enter(HuntingState.ATTACKING_DUMMY)
 
     def _update_attacking_dummy(self, frame: np.ndarray) -> None:
-        """허수아비를 반복 클릭 공격. 목표 레벨 달성 시 속도 물약 사용."""
+        """허수아비 방향으로 드래그 반복 공격. 목표 레벨 달성 시 속도 물약 사용."""
         now = time.time()
 
         # 레벨 읽기
@@ -329,14 +329,15 @@ class HuntingStateMachine:
             self._enter(HuntingState.USE_SPEED_POTION)
             return
 
-        # 주기적 공격 클릭
+        # 주기적 드래그 공격 (마우스 누른 채 드래그 → 놓기)
         if now - self._last_dummy_atk >= self.dummy_atk_interval:
-            ax, ay = self.dummy_coord
-            self.pico.click(ax, ay)
+            fx, fy = self.dummy_drag_from
+            tx, ty = self.dummy_drag_to
+            self.pico.drag(fx, fy, tx, ty, self.dummy_drag_steps)
             self._last_dummy_atk = now
             elapsed = int(now - self._entered_at)
             logger.debug(
-                f"[HuntingSM] 허수아비 공격 중... "
+                f"[HuntingSM] 허수아비 드래그 공격: ({fx},{fy})→({tx},{ty}) "
                 f"레벨={level or '?'} 경과={elapsed}s"
             )
 

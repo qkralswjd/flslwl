@@ -58,13 +58,18 @@
         "wait_after_click_ms": 3000
     },
     "dummy": {
-        "_comment": "허수아비 공격 좌표 (절대 화면 기준)",
-        "attack_coord": {
-            "x": -1372,
-            "y": 840,
-            "width": 332,
-            "height": 53
+        "_comment": "허수아비 드래그 공격 설정 (절대 화면 기준). 태어난 자리에서 허수아비 방향으로 드래그",
+        "drag_from": {
+            "_comment": "드래그 시작점 (캐릭터 위치 근처). coordinate_picker.py X키로 지정",
+            "x": 960,
+            "y": 600
         },
+        "drag_to": {
+            "_comment": "드래그 끝점 (허수아비 방향). coordinate_picker.py X키로 지정",
+            "x": 960,
+            "y": 400
+        },
+        "drag_steps": 8,
         "attack_interval_ms": 500,
         "move_timeout_ms": 3000
     },
