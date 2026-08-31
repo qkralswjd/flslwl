@@ -20,12 +20,14 @@ import numpy as np
 
 logger = logging.getLogger("hp_reader")
 
-# 리니지 클래식 HP 바 HSV 범위 (파란색 계열 — royal blue)
+# 리니지 클래식 HP 바 HSV 범위 (빨간색 계열)
+# 실측값: center_HSV=[0, 252, 87] → H=0, S=252, V=87
 # OpenCV HSV: H=0~180, S=0~255, V=0~255
-# 파란색: H≈100~130, 채도 높음, 명도 중~고
 _HP_HSV_RANGES = [
-    # 파란색 영역 (H=95~135, S=80+, V=60+)
-    ((95, 80, 60), (135, 255, 255)),
+    # 빨간색 영역 1 (H=0~10, V 하한 40으로 낮춤 — 어두운 빨간도 포함)
+    ((0, 80, 40), (10, 255, 255)),
+    # 빨간색 영역 2 (H=170~180, 색상환 반대편)
+    ((170, 80, 40), (180, 255, 255)),
 ]
 
 
@@ -62,22 +64,10 @@ def _calc_hp_pct(crop: np.ndarray) -> float:
     # 각 열에 빨간 픽셀이 하나라도 있으면 True
     col_has_red = np.any(mask > 0, axis=0)  # shape: (width,)
 
-    # 왼쪽부터 연속으로 채워진 열 수 계산
-    # (HP 바는 왼쪽=꽉 참, 오른쪽=빈 공간 방식)
-    filled_cols = 0
-    for has_red in col_has_red:
-        if has_red:
-            filled_cols += 1
-        else:
-            break  # 연속이 끊기면 HP 바 끝
-
-    hp_pct = round((filled_cols / total_cols) * 100.0, 1)
-
-    # 연속 채우기가 0인데 전체 빨간 픽셀이 존재하면 폴백: 전체 비율
-    # (HP 바가 오른쪽→왼쪽으로 줄어드는 구조 대비)
-    if hp_pct == 0.0 and np.any(col_has_red):
-        red_cols = int(np.count_nonzero(col_has_red))
-        hp_pct = round((red_cols / total_cols) * 100.0, 1)
+    # HP 바 중간에 텍스트("HP : 109 / 109")가 있어 연속 열이 끊김
+    # → 전체 빨간 열 수 비율로 계산
+    red_cols = int(np.count_nonzero(col_has_red))
+    hp_pct = round((red_cols / total_cols) * 100.0, 1)
 
     return hp_pct
 
