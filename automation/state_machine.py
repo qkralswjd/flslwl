@@ -225,9 +225,13 @@ class HuntingStateMachine:
     # ── 공개 API ──────────────────────────────────────────────────────────
 
     def start(self) -> None:
-        """자동 레벨링 시작."""
+        """자동 레벨링 시작 (IDLE → USE_SCROLL_DUMMY → ... → DONE_PHASE1).
+
+        텔레포트(F6)부터 시작해 전체 흐름을 실행합니다.
+        허수아비 좌표만 공격하려면 start_at_dummy()를 사용하세요.
+        """
         logger.info("=" * 60)
-        logger.info("[HuntingSM] ▶ 요정 1단계 자동 레벨링 시작")
+        logger.info("[HuntingSM] ▶ 요정 1단계 자동 레벨링 시작 (전체 흐름)")
         logger.info(f"  허수아비 목표: Lv.{self.target_level_dummy}  "
                     f"사냥터 목표: Lv.{self.target_level_hunt}")
         logger.info(f"  물약 키: {self.key_potion}  "
@@ -235,6 +239,36 @@ class HuntingStateMachine:
                     f"속도물약 키: {self.key_speed_potion}")
         logger.info("=" * 60)
         self._enter(HuntingState.USE_SCROLL_DUMMY)
+
+    def start_at_dummy(self) -> None:
+        """허수아비 공격부터 시작 (텔레포트 생략).
+
+        이미 허수아비 수련장에 있을 때 사용합니다 (1~5레벨 단계).
+        drag_from/drag_to 좌표가 설정돼 있어야 합니다.
+        Lv.target_level_dummy(기본 5) 달성 시 USE_SPEED_POTION → 사냥터로 전환합니다.
+        """
+        logger.info("=" * 60)
+        logger.info("[HuntingSM] ▶ 허수아비 공격 시작 (1~5레벨 단계)")
+        logger.info(f"  드래그: ({self.dummy_drag_from[0]},{self.dummy_drag_from[1]}) → "
+                    f"({self.dummy_drag_to[0]},{self.dummy_drag_to[1]})")
+        logger.info(f"  목표 레벨: Lv.{self.target_level_dummy}  "
+                    f"공격 간격: {self.dummy_atk_interval*1000:.0f}ms")
+        logger.info(f"  물약 키: {self.key_potion}  HP 임계: {self.hp_reader.threshold_pct:.0f}%")
+        logger.info("=" * 60)
+        self._dummy_move_done = False
+        self._enter(HuntingState.ATTACKING_DUMMY)
+
+    def start_at_hunt_zone(self) -> None:
+        """사냥터 사냥부터 시작 (5~10레벨 단계).
+
+        이미 사냥터에 있을 때 사용합니다.
+        """
+        logger.info("=" * 60)
+        logger.info("[HuntingSM] ▶ 사냥터 사냥 시작 (5~10레벨 단계)")
+        logger.info(f"  목표 레벨: Lv.{self.target_level_hunt}")
+        logger.info("=" * 60)
+        self.hunt_mover.start()
+        self._enter(HuntingState.MOVE_TO_HUNT_ZONE)
 
     def stop(self) -> None:
         """중지 및 IDLE 복귀."""
@@ -349,10 +383,17 @@ class HuntingStateMachine:
             self._enter(HuntingState.ATTACKING_DUMMY)
 
     def _update_attacking_dummy(self, frame: np.ndarray) -> None:
-        """허수아비 방향으로 드래그 반복 공격. 목표 레벨 달성 시 속도 물약 사용."""
+        """허수아비 방향으로 드래그 반복 공격. 목표 레벨 달성 시 속도 물약 사용.
+
+        1~5레벨 구간 핵심 루프:
+          - drag_from → drag_to 방향으로 공격 드래그
+          - attack_interval_ms마다 반복
+          - HP < threshold_pct → F5 물약 (공통 HP 체크에서 처리)
+          - OCR Lv >= target_level_dummy(5) → USE_SPEED_POTION 전환
+        """
         now = time.time()
 
-        # 레벨 읽기
+        # 레벨 읽기 (2초 캐시 적용됨 — OCR 부하 최소화)
         level = self.level_reader.read(frame)
 
         # 목표 레벨 달성 → 속도 물약으로
@@ -372,9 +413,10 @@ class HuntingStateMachine:
             self.pico.drag(fx, fy, tx, ty, self.dummy_drag_steps)
             self._last_dummy_atk = now
             elapsed = int(now - self._entered_at)
-            logger.debug(
-                f"[HuntingSM] 허수아비 드래그 공격: ({fx},{fy})→({tx},{ty}) "
-                f"레벨={level or '?'} 경과={elapsed}s"
+            lv_str = str(level) if level is not None else "?"
+            logger.info(
+                f"[HuntingSM][DUMMY] 드래그 공격 ({fx},{fy})→({tx},{ty}) "
+                f"Lv={lv_str}/{self.target_level_dummy} 경과={elapsed}s"
             )
 
     def _update_use_speed_potion(self) -> None:

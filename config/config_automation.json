@@ -58,19 +58,20 @@
         "wait_after_click_ms": 3000
     },
     "dummy": {
-        "_comment": "허수아비 드래그 공격 설정 (절대 화면 기준). 태어난 자리에서 허수아비 방향으로 드래그",
+        "_comment": "허수아비 드래그 공격 설정 (절대 화면 기준). 캐릭터 위치에서 허수아비 방향으로 드래그. coordinate_picker.py를 실행해 X키로 두 점을 찍은 후 좌표를 여기에 입력하세요.",
         "drag_from": {
-            "_comment": "드래그 시작점 (캐릭터 위치 근처). coordinate_picker.py X키로 지정",
+            "_comment": "드래그 시작점 (캐릭터 발 위치). coordinate_picker.py → X키 첫 번째 클릭",
             "x": 960,
             "y": 600
         },
         "drag_to": {
-            "_comment": "드래그 끝점 (허수아비 방향). coordinate_picker.py X키로 지정",
+            "_comment": "드래그 끝점 (허수아비 위치 방향). coordinate_picker.py → X키 두 번째 클릭",
             "x": 960,
             "y": 400
         },
         "drag_steps": 8,
-        "attack_interval_ms": 500,
+        "attack_interval_ms": 800,
+        "_comment_attack_interval": "공격 간격(ms). 리니지 클래식 허수아비 타격 쿨타임에 맞게 조정 (기본 800ms)",
         "move_timeout_ms": 3000
     },
     "hunt_waypoints": {

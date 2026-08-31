@@ -1,6 +1,7 @@
 """레벨 OCR 인식 모듈.
 
-화면의 지정 영역에서 "Lv.숫자" 형식의 레벨을 읽어옵니다.
+화면의 지정 영역에서 레벨을 읽어옵니다.
+인식 가능 형식: "Lv.숫자", "LEV:숫자", "LEV14" 등
 easyocr을 사용하여 정확도를 높입니다.
 
 사용법:
@@ -58,17 +59,26 @@ def _parse_level(text: str) -> Optional[int]:
     """OCR 텍스트에서 레벨 숫자를 추출합니다.
 
     인식 가능 형식:
-        "Lv.5", "Lv 5", "LV.5", "lv5", "5"
+        "Lv.5", "Lv 5", "LV.5", "lv5"  — 기본 Lv 계열
+        "LEV:14", "LEV14", "Lev:5"      — LEV 계열 (리니지 클래식 일부 UI)
+        "5"                              — 숫자만 (region이 레벨 숫자만 보이는 경우)
     """
-    text = text.strip().replace(" ", "")
+    text_stripped = text.strip()
 
-    # Lv.숫자 형식
-    m = re.search(r"[Ll][Vv]\.?(\d+)", text)
+    # ── 1) LEV: 또는 LEV. 또는 LEV 숫자 형식 (대소문자 무관) ──────────────────
+    #    예: "LEV:14", "Lev:5", "LEV.14", "LEV 14", "LEV14"
+    m = re.search(r"[Ll][Ee][Vv][:.\s]?\s*(\d+)", text_stripped)
     if m:
         return int(m.group(1))
 
-    # 숫자만 있는 경우 (region이 레벨 숫자만 보이는 곳)
-    m = re.search(r"^\d+$", text)
+    # ── 2) Lv.숫자 형식 (기존) ─────────────────────────────────────────────
+    #    예: "Lv.5", "Lv 5", "LV.5", "lv5"
+    m = re.search(r"[Ll][Vv]\.?\s*(\d+)", text_stripped)
+    if m:
+        return int(m.group(1))
+
+    # ── 3) 숫자만 있는 경우 (region이 레벨 숫자만 보이는 곳) ─────────────────
+    m = re.search(r"^\d+$", text_stripped.replace(" ", ""))
     if m:
         val = int(m.group(0))
         if 1 <= val <= 99:

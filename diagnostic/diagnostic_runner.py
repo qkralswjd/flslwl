@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from typing import Optional
@@ -42,6 +43,62 @@ from pico.null_pico import NullPicoWorker
 from diagnostic.models import DiagRecord, infer_decision as _infer_decision
 
 logger = logging.getLogger("diagnostic")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# LootDetector 백그라운드 스레드 (easyocr 호출을 메인 루프에서 분리)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _LootThread(threading.Thread):
+    """LootDetector.find()를 별도 스레드에서 실행, 결과를 캐싱한다.
+
+    메인 루프가 매 프레임 OCR을 기다리지 않도록 분리.
+    scan_interval_s(기본 1.5s) 마다 OCR 재실행.
+    """
+
+    def __init__(self, loot_detector, interval_s: float = 1.5):
+        super().__init__(daemon=True, name="LootDetectorThread")
+        self._detector   = loot_detector
+        self._interval   = interval_s
+        self._lock       = threading.Lock()
+        self._result: list = []
+        self._stop_evt   = threading.Event()
+        self._frame: Optional[np.ndarray] = None
+
+    def push_frame(self, frame: np.ndarray) -> None:
+        """메인 루프가 처리할 최신 프레임을 전달한다 (shallow copy 방지)."""
+        with self._lock:
+            self._frame = frame
+
+    def get_result(self) -> list:
+        """가장 최근 OCR 결과를 반환한다 (blocking 없음)."""
+        with self._lock:
+            return list(self._result)
+
+    def stop(self) -> None:
+        self._stop_evt.set()
+
+    def run(self) -> None:
+        logger.info("[LootThread] 시작")
+        while not self._stop_evt.is_set():
+            frame = None
+            with self._lock:
+                if self._frame is not None:
+                    frame = self._frame.copy()
+
+            if frame is not None:
+                try:
+                    # LootDetector 내부 캐시 무시하고 강제 재실행하려면
+                    # _last_scan_time을 0으로 초기화
+                    self._detector._last_scan_time = 0.0
+                    result = self._detector.find(frame)
+                    with self._lock:
+                        self._result = result
+                except Exception as e:
+                    logger.warning(f"[LootThread] OCR 오류: {e}")
+
+            self._stop_evt.wait(self._interval)
+        logger.info("[LootThread] 종료")
 
 # ── 오버레이 색상 상수 ─────────────────────────────────────────────────────
 _COLOR_ENEMY       = (0, 255, 80)       # 일반 적: 초록
@@ -221,6 +278,8 @@ class DiagnosticRunner:
         self._hp_reader                                         = None
         self._level_reader                                      = None
         self._loot_detector                                     = None
+        # LootDetector 백그라운드 스레드 (easyocr 분리로 frame 속도 개선)
+        self._loot_thread: Optional[_LootThread]                = None
 
     # ── 공개 API ─────────────────────────────────────────────────────────────
 
@@ -330,6 +389,16 @@ class DiagnosticRunner:
                 logger.warning(f"[Diagnostic] HuntingStateMachine 초기화 실패: {e}")
                 self._hunting_sm = None
 
+        # LootDetector 백그라운드 스레드 시작 (easyocr 분리)
+        if self._loot_detector is not None:
+            loot_interval = (
+                self.auto_cfg.get("loot", {}).get("scan_interval_s", 1.5)
+                if self.auto_cfg else 1.5
+            )
+            self._loot_thread = _LootThread(self._loot_detector, interval_s=max(loot_interval, 1.0))
+            self._loot_thread.start()
+            logger.info(f"[Diagnostic] LootThread 시작 (간격={max(loot_interval,1.0):.1f}s)")
+
         logger.info("[Diagnostic] setup 완료. 'q' 키로 종료.")
 
     def run(self, stop_event=None) -> None:
@@ -364,6 +433,10 @@ class DiagnosticRunner:
                 t0    = time.time()
                 frame = self._capturer.grab()
                 last_capture_time = t0
+
+                # LootThread에 최신 프레임 전달 (non-blocking)
+                if self._loot_thread is not None:
+                    self._loot_thread.push_frame(frame)
 
                 # ROI 슬라이스
                 if roi_dict:
@@ -475,7 +548,10 @@ class DiagnosticRunner:
         if self._level_reader is not None:
             lv = self._level_reader.get_cached()
             rec.level = lv
-        if self._loot_detector is not None:
+        if self._loot_thread is not None:
+            # 백그라운드 스레드 결과 읽기 (non-blocking)
+            rec.loot_count = len(self._loot_thread.get_result())
+        elif self._loot_detector is not None:
             rec.loot_count = len(self._loot_detector.find(frame))
 
         # HuntingStateMachine 상태
@@ -527,6 +603,10 @@ class DiagnosticRunner:
             f"총 tick={self._tick_count}  "
             f"로그={self._log_path}"
         )
+        # LootThread 종료 (daemon이지만 명시적으로 stop)
+        if self._loot_thread is not None:
+            self._loot_thread.stop()
+            self._loot_thread.join(timeout=3.0)
         if self._capturer:
             self._capturer.close()
         cv2.destroyAllWindows()
