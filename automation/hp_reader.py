@@ -150,6 +150,20 @@ class HpReader:
         crop = frame[y:y2, x:x2]
         hp_pct = _calc_hp_pct(crop)
 
+        # 디버그: 크롭 좌표 / 색상 샘플 항상 출력 (TODO: 안정화 후 제거)
+        import numpy as _np
+        import cv2 as _cv2
+        _hsv = _cv2.cvtColor(crop, _cv2.COLOR_BGR2HSV) if crop.size > 0 else None
+        _sample_bgr = crop[crop.shape[0]//2, crop.shape[1]//2].tolist() if crop.size > 0 else []
+        _sample_hsv = _hsv[_hsv.shape[0]//2, _hsv.shape[1]//2].tolist() if _hsv is not None else []
+        logger.info(
+            f"[HpReader.debug] crop=({x},{y},{x2-x},{y2-y}) "
+            f"frame=({fw},{fh}) "
+            f"center_BGR={_sample_bgr} "
+            f"center_HSV={_sample_hsv} "
+            f"hp={hp_pct}%"
+        )
+
         # 급격한 변화만 로그 (5% 이상 변화 시)
         if abs(hp_pct - self._cached_hp) >= 5.0:
             logger.debug(
