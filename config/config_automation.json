@@ -58,14 +58,12 @@
     "dummy": {
         "_comment": "허수아비 드래그 공격 설정 (절대 화면 기준). 캐릭터 위치에서 허수아비 방향으로 드래그. coordinate_picker.py를 실행해 X키로 두 점을 찍은 후 좌표를 여기에 입력하세요.",
         "drag_from": {
-            "_comment": "드래그 시작점 (캐릭터 발 위치). coordinate_picker.py → X키 첫 번째 클릭",
-            "x": 960,
-            "y": 600
+            "x": 1184,
+            "y": 171
         },
         "drag_to": {
-            "_comment": "드래그 끝점 (허수아비 위치 방향). coordinate_picker.py → X키 두 번째 클릭",
-            "x": 960,
-            "y": 400
+            "x": 1109,
+            "y": 201
         },
         "drag_steps": 8,
         "attack_interval_ms": 800,

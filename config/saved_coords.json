@@ -1,1 +1,22 @@
-{}
+{
+    "HP": {
+        "type": "region",
+        "x": 548,
+        "y": 842,
+        "width": 335,
+        "height": 53,
+        "config_key": "HP 바 영역"
+    },
+    "허수아비_FROM": {
+        "type": "point",
+        "x": 1184,
+        "y": 171,
+        "config_key": "허수아비 drag_from"
+    },
+    "허수아비_to": {
+        "type": "point",
+        "x": 1109,
+        "y": 201,
+        "config_key": "허수아비 drag_to"
+    }
+}
