@@ -110,13 +110,22 @@ def main():
     # 실행 모드 선택
     waypoint_test = "--waypoint" in sys.argv
 
+    full_test = "--full" in sys.argv
+
     if waypoint_test:
         # 웨이포인트 이동만 테스트 (허수아비 생략)
         wp_cfg = auto_cfg.get("hunt_waypoints", {})
         logger.info("  [MODE] 웨이포인트 이동 테스트")
-        logger.info(f"  웨이포인트 {len(wp_cfg.get('points',[]))}개, 대기 {wp_cfg.get('move_timeout_ms',5000)//1000}초/구간")
+        logger.info(f"  웨이포인트 {len(wp_cfg.get('points',[]))}개, 대기 {wp_cfg.get('move_timeout_ms',8000)//1000}초/구간")
         sm.start_at_hunt_zone()
         logger.info("  start_at_hunt_zone() 호출 → MOVE_TO_HUNT_ZONE 진입")
+    elif full_test:
+        # 허수아비 10초 공격 후 강제 사냥터 이동 테스트
+        sm.target_level_dummy = 999  # 레벨 달성 방지
+        logger.info("  [MODE] 풀 테스트 (허수아비 10초 → 사냥터 이동)")
+        logger.info("  target_level_dummy=999 (10초 후 강제 전환)")
+        sm.start_at_dummy()
+        logger.info("  start_at_dummy() 호출 → ATTACKING_DUMMY 진입")
     else:
         # 허수아비 공격부터 시작 (기본)
         sm.start_at_dummy()
@@ -127,6 +136,8 @@ def main():
 
     # ── 메인 루프 ──────────────────────────────────────────────────────
     _diag_counter = 0
+    _start_t = time.time()
+    _full_switched = False
     try:
         while True:
             frame = capturer.grab()
@@ -134,6 +145,14 @@ def main():
 
             status = sm.get_status()
             state  = status.get("state", "?")
+
+            # --full 모드: 10초 후 강제 사냥터 이동 전환
+            if full_test and not _full_switched and time.time() - _start_t >= 10.0:
+                if state == "ATTACKING_DUMMY":
+                    logger.info("  [FULL] 10초 경과 → 강제 사냥터 이동 전환")
+                    from automation.state_machine import HuntingState
+                    sm._enter(HuntingState.USE_SPEED_POTION)
+                    _full_switched = True
 
             # 3초마다 Pico 스레드 상태 출력
             _diag_counter += 1
