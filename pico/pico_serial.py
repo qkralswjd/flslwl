@@ -38,7 +38,7 @@ logger = logging.getLogger("pico_serial")
 
 PING_INTERVAL_S  = 1.0
 PONG_TIMEOUT_S   = 30.0  # _do_drag 최대 실행시간(~6.4s) 대응 (기존 3.0에서 상향)
-ACK_TIMEOUT_S    = 0.3
+ACK_TIMEOUT_S    = 1.0  # MOVE 응답 대기 (기존 0.3에서 상향)
 
 CORRECTION_TOLERANCE_PX = 4
 MAX_CORRECTION_ITERS     = 20
@@ -195,7 +195,7 @@ class PicoSerialWorker:
                     self._on_disconnected("Pico heartbeat timeout")
                     break
 
-                # 큐에 쌓인 명령 처리
+                # 큐에 쌓인 명령 처리 (drag는 최신 1개만 실행, 나머지 버림)
                 try:
                     while True:
                         cmd = self._out_queue.get_nowait()
@@ -204,6 +204,17 @@ class PicoSerialWorker:
                             _, x_s, y_s, pulse_s = cmd.split(":")
                             self._do_move_click(int(x_s), int(y_s), int(pulse_s))
                         elif cmd.startswith("__DRAG__:"):
+                            # 큐에 더 최신 drag가 있으면 현재 것 버리고 최신 것 사용
+                            latest = cmd
+                            while not self._out_queue.empty():
+                                peek = self._out_queue.get_nowait()
+                                if peek.startswith("__DRAG__:"):
+                                    self._on_log("DEBUG", f"큐 드레인(오래된 drag 버림): {latest}")
+                                    latest = peek
+                                else:
+                                    # drag 아닌 명령은 다시 앞에 넣기 어려우니 실행
+                                    self._write_line(peek)
+                            cmd = latest
                             _, fx_s, fy_s, tx_s, ty_s, steps_s = cmd.split(":")
                             self._on_log("DEBUG", f"_do_drag 시작: ({fx_s},{fy_s})→({tx_s},{ty_s}) steps={steps_s}")
                             self._do_drag(int(fx_s), int(fy_s), int(tx_s), int(ty_s), int(steps_s))
