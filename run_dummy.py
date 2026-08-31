@@ -53,6 +53,9 @@ def main():
     logger.info(f"  attack_interval: {dummy_cfg.get('attack_interval_ms')}ms")
     logger.info(f"  target_level   : Lv.{auto_cfg.get('level_ocr',{}).get('target_level_dummy',5)}")
 
+    # ── monitor_index 먼저 로드 (Pico 오프셋 계산에 필요) ───────────────
+    monitor_index = config.get("monitor_index", 2)
+
     # ── Pico 연결 ──────────────────────────────────────────────────────
     pico_cfg = config.get("pico", {})
     pico_enabled = pico_cfg.get("enabled", False)
@@ -61,7 +64,7 @@ def main():
         try:
             from pico.pico_serial import PicoSerialWorker
             import mss as _mss
-            with _mss.mss() as _sct:
+            with _mss.MSS() as _sct:
                 _monitors = _sct.monitors
                 _mon = _monitors[monitor_index] if monitor_index < len(_monitors) else _monitors[1]
                 mon_left = _mon["left"]
@@ -92,7 +95,6 @@ def main():
 
     # ── ScreenCapturer ─────────────────────────────────────────────────
     from capture.screen_capture import ScreenCapturer
-    monitor_index = config.get("monitor_index", 2)
     capturer = ScreenCapturer(monitor_index=monitor_index)
     logger.info(f"  monitor_index  : {monitor_index}")
 
@@ -127,9 +129,11 @@ def main():
             # 3초마다 Pico 스레드 상태 출력
             _diag_counter += 1
             if _diag_counter % 60 == 0 and pico_enabled:
-                alive = pico._thread.is_alive() if pico._thread else False
-                qsize = pico._out_queue.qsize()
-                conn  = pico.is_connected
+                thread = getattr(pico, "_thread", None)
+                alive  = thread.is_alive() if thread else False
+                qsize  = getattr(pico, "_out_queue", None)
+                qsize  = qsize.qsize() if qsize else -1
+                conn   = pico.is_connected
                 logger.info(f"  [DIAG] thread_alive={alive} queue={qsize} is_connected={conn}")
 
             # 완료 또는 IDLE(오류) 감지
