@@ -72,7 +72,7 @@
     },
     "hunt_waypoints": {
         "_comment": "Lv.5 달성 후 사냥터까지 순차 클릭 이동. 클릭 후 move_timeout_ms 경과하면 도착 간주 → 다음 이동",
-        "move_timeout_ms": 5000,
+        "move_timeout_ms": 8000,
         "points": [
             {"x": 1023, "y": 763, "label": "1차이동", "wait_ms": 500},
             {"x": 343,  "y": 722, "label": "2차이동", "wait_ms": 500},
