@@ -107,7 +107,24 @@ class SequentialTargetStateMachine:
         self._lock_streak: int             = 0      # LOCKING 연속 확인 카운트
         self._state_entered_at: float      = time.time()
 
+        # ── 공격 활성 플래그 ────────────────────────────────────────────
+        # set_active(False) 하면 update() 호출 자체가 reset+return 됨
+        # HuntingStateMachine이 HUNTING_10일 때만 True로 설정한다
+        self.active: bool = True
+
     # ── 외부 API ─────────────────────────────────────────────────────
+
+    def set_active(self, active: bool) -> None:
+        """공격 활성 여부를 설정한다.
+
+        active=False 이면 update() 가 즉시 reset+return 하여
+        어떤 경로로도 Pico 공격 명령이 나가지 않는다.
+        """
+        if not active and self.active:
+            # 비활성 전환 시 즉시 초기화
+            self.reset()
+            logger.info("[SM] set_active(False) → reset")
+        self.active = active
 
     def reset(self) -> None:
         self.state      = TargetState.IDLE
@@ -116,7 +133,16 @@ class SequentialTargetStateMachine:
         self._state_entered_at = time.time()
 
     def update(self, enemies: Dict[int, Enemy]) -> None:
-        """매 detection tick마다 호출. enemies = tracker의 현재 Enemy dict."""
+        """매 detection tick마다 호출. enemies = tracker의 현재 Enemy dict.
+
+        active=False 이면 즉시 reset 후 return → Pico 명령 절대 미발생.
+        """
+        # ── 방어 코드: active=False 이면 공격 일체 차단 ────────────────
+        if not self.active:
+            if self.state != TargetState.IDLE or self.target_id is not None:
+                self.reset()
+                logger.debug("[SM] inactive → reset enforced")
+            return
 
         # 살아있는 적만 대상 (predicted 포함 — 잠깐 소실은 계속 추적)
         active = {eid: e for eid, e in enemies.items() if not e.predicted}

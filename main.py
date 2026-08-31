@@ -307,6 +307,14 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
                     dt = now - last_tracker_update
                     last_tracker_update = now
+
+                    # ── TargetSM 활성 여부: HUNTING_10일 때만 공격 허용 ──
+                    if hunting_sm is not None:
+                        from automation.state_machine import HuntingState
+                        _is_hunting = (hunting_sm.state == HuntingState.HUNTING_10)
+                        tracker._sm.set_active(_is_hunting)
+                    # hunting_sm 없는 dungeon 모드는 항상 active(기본값 True)
+
                     enemies = tracker.update(detections, dt if dt > 0 else 1e-3)
 
                     # ── HuntingStateMachine 업데이트 ──────────────────
