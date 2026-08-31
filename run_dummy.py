@@ -59,7 +59,7 @@ def main():
 
     if pico_enabled:
         try:
-            from pico.pico_worker import PicoSerialWorker
+            from pico.pico_serial import PicoSerialWorker
             port     = pico_cfg.get("port", "COM3")
             baudrate = pico_cfg.get("baudrate", 115200)
             pico     = PicoSerialWorker(port=port, baudrate=baudrate)
@@ -99,7 +99,7 @@ def main():
     try:
         while True:
             frame = capturer.grab()
-            sm.tick(frame)
+            sm.update(frame, enemies=[])   # enemies: 적 감지 없이 허수아비 공격만
 
             status = sm.get_status()
             state  = status.get("state", "?")
