@@ -134,7 +134,12 @@ class OverlayPicker:
         ox = self._mon_left
         oy = self._mon_top
 
+        # ── OpenCV 창을 Primary 모니터(mss monitors[1]) 위치에 강제 배치 ──
+        # 듀얼모니터 환경에서 창이 엉뚱한 모니터에 뜨는 것을 방지
         cv2.namedWindow(self.WIN_TITLE, cv2.WINDOW_NORMAL)
+        # 1) 먼저 창을 Primary 모니터의 좌상단으로 이동
+        cv2.moveWindow(self.WIN_TITLE, self._mon_left, self._mon_top)
+        # 2) 그 다음 전체화면 전환 (이렇게 해야 올바른 모니터에서 전체화면)
         cv2.setWindowProperty(self.WIN_TITLE, cv2.WND_PROP_FULLSCREEN,
                               cv2.WINDOW_FULLSCREEN)
 
@@ -312,6 +317,15 @@ class CoordManagerUI:
         self.coords   = load_saved_coords()
         self.auto_cfg = load_automation_config()
         self._picker  = OverlayPicker()
+
+        # ── Tkinter 창을 Primary 모니터(mss monitors[1]) 위치에 강제 배치 ──
+        # 듀얼모니터에서 창이 모니터2에 뜨는 것을 방지
+        with mss.mss() as sct:
+            mon = sct.monitors[MONITOR_INDEX]
+            mon_left = mon["left"]
+            mon_top  = mon["top"]
+        # 창 크기 설정 후 Primary 모니터 좌상단 기준으로 배치
+        self.root.geometry(f"820x560+{mon_left + 40}+{mon_top + 40}")
 
         self._build_ui()
         self._refresh_list()
