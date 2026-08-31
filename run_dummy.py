@@ -107,9 +107,21 @@ def main():
         frame_grabber = capturer.grab,
     )
 
-    # 텔레포트 없이 허수아비 공격부터 즉시 시작
-    sm.start_at_dummy()
-    logger.info("  start_at_dummy() 호출 → ATTACKING_DUMMY 진입")
+    # 실행 모드 선택
+    waypoint_test = "--waypoint" in sys.argv
+
+    if waypoint_test:
+        # 웨이포인트 이동만 테스트 (허수아비 생략)
+        wp_cfg = auto_cfg.get("hunt_waypoints", {})
+        logger.info("  [MODE] 웨이포인트 이동 테스트")
+        logger.info(f"  웨이포인트 {len(wp_cfg.get('points',[]))}개, 대기 {wp_cfg.get('move_timeout_ms',5000)//1000}초/구간")
+        sm.start_at_hunt_zone()
+        logger.info("  start_at_hunt_zone() 호출 → MOVE_TO_HUNT_ZONE 진입")
+    else:
+        # 허수아비 공격부터 시작 (기본)
+        sm.start_at_dummy()
+        logger.info("  start_at_dummy() 호출 → ATTACKING_DUMMY 진입")
+
     logger.info("  Ctrl+C 로 종료")
     logger.info("=" * 50)
 
