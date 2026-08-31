@@ -395,6 +395,16 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             cv2.imshow(WINDOW_NAME, display_frame)
 
             if status_callback:
+                # HuntingStateMachine 상태 정보 추출
+                _sm_state = _sm_level = _sm_hp = _sm_kills = _sm_min = None
+                if hunting_sm is not None:
+                    _s = hunting_sm.get_status()
+                    _sm_state = _s.get("state", "")
+                    _sm_level = _s.get("level", 0)
+                    _sm_hp    = _s.get("hp_pct")
+                    _sm_kills = _s.get("kills", 0)
+                    _sm_min   = _s.get("elapsed_min", 0.0)
+
                 status_callback(
                     len(enemies),
                     capture_fps_smooth,
@@ -402,6 +412,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     pico_connected,
                     target_state_name = tracker.target_state.name,
                     current_target_id = tracker.current_target_id,
+                    sm_state          = _sm_state or "",
+                    sm_level          = _sm_level or 0,
+                    sm_hp_pct         = _sm_hp,
+                    sm_kills          = _sm_kills or 0,
+                    sm_elapsed_min    = float(_sm_min or 0),
                 )
 
             key = cv2.waitKey(1) & 0xFF
