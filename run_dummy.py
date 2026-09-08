@@ -98,6 +98,35 @@ def main():
     capturer = ScreenCapturer(monitor_index=monitor_index)
     logger.info(f"  monitor_index  : {monitor_index}")
 
+    # ── 몬스터 탐지 파이프라인 (HUNTING_10 순찰 중 사용) ───────────────
+    from detection.motion_detector import MotionDetector
+    from detection.contour_detector import ContourDetector
+    from detection.classifier import MonsterClassifier
+    from paths import get_templates_dir, get_reject_templates_dir
+
+    motion_detector  = MotionDetector(
+        blur_kernel  = config.get("blur_kernel", 5),
+        morph_kernel = config.get("morph_kernel", 5),
+        **config.get("motion", {}),
+    )
+    contour_detector = ContourDetector(
+        config.get("min_area", 100),
+        config.get("max_area", 50000),
+    )
+    clf_cfg    = config.get("classifier", {})
+    classifier = MonsterClassifier(
+        templates_dir        = clf_cfg.get("templates_dir") or get_templates_dir(),
+        reject_templates_dir = clf_cfg.get("reject_templates_dir") or get_reject_templates_dir(),
+        confidence_threshold = clf_cfg.get("confidence_threshold", 0.5),
+        excluded_color_ranges= clf_cfg.get("excluded_color_ranges"),
+        excluded_color_ratio = clf_cfg.get("excluded_color_ratio", 0.2),
+        min_size_ratio       = clf_cfg.get("min_size_ratio", 0.6),
+    )
+    logger.info(f"  [탐지] 템플릿: {clf_cfg.get('templates_dir', get_templates_dir())}")
+
+    roi_cfg  = config.get("roi")
+    roi_dict = roi_cfg if roi_cfg else None
+
     # ── HuntingStateMachine ────────────────────────────────────────────
     from automation.state_machine import HuntingStateMachine, HuntingState
 
@@ -135,16 +164,46 @@ def main():
     logger.info("=" * 50)
 
     # ── 메인 루프 ──────────────────────────────────────────────────────
-    _diag_counter = 0
-    _start_t = time.time()
+    _diag_counter  = 0
+    _start_t       = time.time()
     _full_switched = False
+    _enemies       = []   # 탐지된 적 목록 (HUNTING_10일 때만 갱신)
     try:
         while True:
-            frame = capturer.grab()
-            sm.update(frame, enemies=[])   # enemies: 적 감지 없이 허수아비 공격만
+            frame  = capturer.grab()
+            state  = sm.get_status().get("state", "?")
+
+            # ── HUNTING_10 상태일 때만 탐지 실행 ──────────────────────
+            if state == "HUNTING_10":
+                roi_frame = frame
+                if roi_dict:
+                    x, y, w, h = roi_dict["x"], roi_dict["y"], roi_dict["width"], roi_dict["height"]
+                    roi_frame = frame[y:y+h, x:x+w]
+
+                mask       = motion_detector.get_mask(roi_frame, learning_rate=-1.0)
+                detections = contour_detector.detect(mask)
+
+                # detection_zone 필터
+                dz = config.get("detection_zone")
+                if dz and dz.get("enabled", False):
+                    cx, cy = dz.get("center_x", 960), dz.get("center_y", 540)
+                    hw, hh = dz.get("half_width", 600), dz.get("half_height", 400)
+                    detections = [
+                        d for d in detections
+                        if (cx - hw) <= d.center_x <= (cx + hw)
+                        and (cy - hh) <= d.center_y <= (cy + hh)
+                    ]
+
+                detections = classifier.confirm(detections, roi_frame)
+                _enemies   = detections
+                if _enemies:
+                    logger.info(f"  [탐지] 몬스터 {len(_enemies)}개 발견")
+            else:
+                _enemies = []
+
+            sm.update(frame, enemies=_enemies)
 
             status = sm.get_status()
-            state  = status.get("state", "?")
 
             # --full 모드: 10초 후 강제 사냥터 이동 전환
             if full_test and not _full_switched and time.time() - _start_t >= 10.0:

@@ -511,8 +511,30 @@ class HuntingStateMachine:
             self._enter(HuntingState.LOOTING)
             return
 
-        # ── 순찰 tick (enemies 없을 때만 이동) ────────────────────────
-        # 나중에 몬스터 탐지 추가 시: enemies 있으면 이 블록 skip → 공격 로직으로
+        # ── 몬스터 발견 → 클릭 이동 + 드래그 공격 ────────────────────
+        if enemies:
+            target = min(enemies, key=lambda e: (
+                (e.center_x - 960) ** 2 + (e.center_y - 540) ** 2
+            ))
+            tx, ty = target.center_x, target.center_y
+
+            # 오프셋 적용 (roi 사용 시)
+            roi_off = self._roi_offset
+            tx += roi_off[0]
+            ty += roi_off[1]
+
+            logger.info(f"[HuntingSM] 몬스터 발견 ({tx},{ty}) → 클릭+드래그 공격")
+
+            # 1. 몬스터 위치 클릭 (이동)
+            self.pico.click(tx, ty)
+
+            # 2. 드래그 공격 (허수아비와 동일)
+            fx, fy = self.dummy_drag_from
+            ttx, tty = self.dummy_drag_to
+            self.pico.drag(fx, fy, ttx, tty, self.dummy_drag_steps)
+            return
+
+        # ── 순찰 tick (몬스터 없을 때 이동) ──────────────────────────
         status = self.patrol_mover.tick(self.pico)
         if status == "ARRIVED":
             label = self.patrol_mover.current_label
