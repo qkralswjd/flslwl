@@ -117,5 +117,14 @@
         "scan_interval_s": 0.5,
         "click_interval_ms": 400,
         "timeout_ms": 3000
+    },
+    "patrol_combat": {
+        "_comment": "순찰 웨이포인트 도착 시 전투 서브플로우 설정",
+        "kill_wait_ms": 2500,
+        "_comment_kill_wait": "공격 후 몬스터 사망 대기 시간 (ms). 이 시간 후 아데나 스캔",
+        "attack_interval_ms": 800,
+        "_comment_attack": "같은 지점에서 연속 공격 사이 최소 간격 (ms)",
+        "max_attacks_per_wp": 3,
+        "_comment_max": "웨이포인트 1곳에서 최대 공격 횟수 (이 횟수 초과 시 다음 WP로 진행)"
     }
 }

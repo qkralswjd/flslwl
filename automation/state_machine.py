@@ -198,6 +198,22 @@ class HuntingStateMachine:
         )
         self._patrol_started = False  # HUNTING_10 진입 시 최초 1회 start()
 
+        # ── 순찰 전투 서브플로우 (patrol_combat) ──────────────────────
+        #   _pc_state: "PATROL" | "SCAN" | "KILL_WAIT" | "LOOT_SCAN"
+        #     PATROL    : 순찰 이동 중 (patrol_mover.tick 호출)
+        #     SCAN      : 웨이포인트 도착 — 적/아데나 탐지
+        #     KILL_WAIT : 공격 후 몬스터 사망 대기
+        #     LOOT_SCAN : 사망 후 아데나 OCR 스캔
+        pc_cfg = config.get("patrol_combat", {})
+        self._pc_kill_wait      = pc_cfg.get("kill_wait_ms",        2500) / 1000.0
+        self._pc_atk_interval   = pc_cfg.get("attack_interval_ms",   800) / 1000.0
+        self._pc_max_attacks    = pc_cfg.get("max_attacks_per_wp",      3)
+
+        self._pc_state          = "PATROL"   # 현재 서브상태
+        self._pc_kill_start_t   = 0.0        # 공격 완료 시각
+        self._pc_last_atk_t     = 0.0        # 마지막 공격 시각
+        self._pc_attack_count   = 0          # 현재 WP에서 공격 횟수
+
         # ── 아데나 탐지기 ─────────────────────────────────────────────
         loot_cfg = config.get("loot", {})
         self.loot_detector = LootDetector(
@@ -480,65 +496,136 @@ class HuntingStateMachine:
     def _update_hunting_10(
         self, frame: np.ndarray, enemies: list
     ) -> None:
-        """사냥터 사냥. 순찰 중 아데나 탐지, Lv.target_level_hunt 달성 시 DONE_PHASE1."""
+        """사냥터 사냥 — PATROL_COMBAT 서브플로우.
+
+        각 웨이포인트 도착 시 그 자리에서 전투를 완료한 뒤 다음으로 이동합니다.
+
+        서브상태 전이:
+            PATROL    → patrol_mover.tick() → ARRIVED 시 SCAN 전환
+            SCAN      → enemies 있으면 공격 후 KILL_WAIT
+                        enemies 없고 아데나 있으면 LOOTING (복귀→SCAN)
+                        enemies 없고 아데나 없으면 PATROL (다음 WP)
+            KILL_WAIT → kill_wait_ms 경과 후 LOOT_SCAN
+            LOOT_SCAN → 아데나 있으면 LOOTING (복귀→SCAN)
+                        아데나 없으면 PATROL (다음 WP)
+        """
         now = time.time()
 
         # ── 최초 진입 시 순찰 시작 ─────────────────────────────────────
         if not self._patrol_started:
             self.patrol_mover.start()
             self._patrol_started = True
+            self._pc_state       = "PATROL"
             logger.info("[HuntingSM] 순찰 시작 (patrol_waypoints loop)")
 
-        # ── 레벨 체크 → 10레벨 달성 = 1단계 완료 ─────────────────────
+        # ── 레벨 체크 → 목표 레벨 달성 = 1단계 완료 ──────────────────
         level = self.level_reader.read(frame)
         if level is not None and level >= self.target_level_hunt:
             logger.info(
                 f"[HuntingSM] Lv.{level} 달성! "
-                f"(목표 Lv.{self.target_level_hunt}) "
-                f"→ 1단계 완료"
+                f"(목표 Lv.{self.target_level_hunt}) → 1단계 완료"
             )
             self._enter(HuntingState.DONE_PHASE1)
             return
 
-        # ── 아데나 탐지 → LOOTING ──────────────────────────────────────
-        loot = self.loot_detector.find(frame)
-        if loot:
-            logger.info(f"[HuntingSM] 아데나 {len(loot)}개 발견 → LOOTING")
-            self._loot_targets      = list(loot)
-            self._loot_idx          = 0
-            self._loot_start_t      = now
-            self._loot_return_state = HuntingState.HUNTING_10
-            self._enter(HuntingState.LOOTING)
+        # ═══════════════════════════════════════════════════════════════
+        # PATROL_COMBAT 서브플로우
+        # ═══════════════════════════════════════════════════════════════
+
+        # ── [PATROL] 이동 중 ─────────────────────────────────────────
+        if self._pc_state == "PATROL":
+            status = self.patrol_mover.tick(self.pico)
+            if status == "ARRIVED":
+                label = self.patrol_mover.current_label
+                logger.info(f"[HuntingSM] 순찰 '{label}' 도착 → 전투 스캔")
+                self._pc_state        = "SCAN"
+                self._pc_attack_count = 0
             return
 
-        # ── 몬스터 발견 → 클릭 이동 + 드래그 공격 ────────────────────
-        if enemies:
-            target = min(enemies, key=lambda e: (
-                (e.center_x - 960) ** 2 + (e.center_y - 540) ** 2
-            ))
-            tx, ty = target.center_x, target.center_y
+        # ── [SCAN] 도착 지점 탐지 ────────────────────────────────────
+        if self._pc_state == "SCAN":
+            # 최대 공격 횟수 초과 → 다음 WP로 진행
+            if self._pc_attack_count >= self._pc_max_attacks:
+                logger.info(
+                    f"[HuntingSM] 공격 {self._pc_attack_count}회 완료 "
+                    f"(최대 {self._pc_max_attacks}) → 다음 WP"
+                )
+                self._pc_state        = "PATROL"
+                self._pc_attack_count = 0
+                return
 
-            # 오프셋 적용 (roi 사용 시)
-            roi_off = self._roi_offset
-            tx += roi_off[0]
-            ty += roi_off[1]
+            # 공격 쿨타임 체크
+            if now - self._pc_last_atk_t < self._pc_atk_interval:
+                return
 
-            logger.info(f"[HuntingSM] 몬스터 발견 ({tx},{ty}) → 클릭+드래그 공격")
+            if enemies:
+                # 가장 가까운 적 선택
+                target = min(enemies, key=lambda e: (
+                    (e.center_x - 960) ** 2 + (e.center_y - 540) ** 2
+                ))
+                tx = target.center_x + self._roi_offset[0]
+                ty = target.center_y + self._roi_offset[1]
 
-            # 1. 몬스터 위치 클릭 (이동)
-            self.pico.click(tx, ty)
+                self._pc_attack_count += 1
+                logger.info(
+                    f"[HuntingSM] 몬스터 ({tx},{ty}) 공격 "
+                    f"[{self._pc_attack_count}/{self._pc_max_attacks}]"
+                )
 
-            # 2. 드래그 공격 (허수아비와 동일)
-            fx, fy = self.dummy_drag_from
-            ttx, tty = self.dummy_drag_to
-            self.pico.drag(fx, fy, ttx, tty, self.dummy_drag_steps)
+                # 1. 몬스터 위치 클릭 (이동+선택)
+                self.pico.click(tx, ty)
+
+                # 2. 드래그 공격
+                fx, fy   = self.dummy_drag_from
+                ttx, tty = self.dummy_drag_to
+                self.pico.drag(fx, fy, ttx, tty, self.dummy_drag_steps)
+
+                self._pc_last_atk_t   = now
+                self._pc_kill_start_t = now
+                self._pc_state        = "KILL_WAIT"
+                return
+
+            # 적 없음 → 아데나 즉시 체크
+            loot = self.loot_detector.find(frame)
+            if loot:
+                logger.info(f"[HuntingSM] 아데나 {len(loot)}개 발견 → LOOTING")
+                self._loot_targets      = list(loot)
+                self._loot_idx          = 0
+                self._loot_start_t      = now
+                self._loot_return_state = HuntingState.HUNTING_10
+                self._enter(HuntingState.LOOTING)
+                return
+
+            # 적도 아데나도 없음 → 다음 WP
+            logger.info("[HuntingSM] 탐지 없음 → 다음 WP")
+            self._pc_state = "PATROL"
             return
 
-        # ── 순찰 tick (몬스터 없을 때 이동) ──────────────────────────
-        status = self.patrol_mover.tick(self.pico)
-        if status == "ARRIVED":
-            label = self.patrol_mover.current_label
-            logger.info(f"[HuntingSM] 순찰 '{label}' 도착")
+        # ── [KILL_WAIT] 몬스터 사망 대기 ─────────────────────────────
+        if self._pc_state == "KILL_WAIT":
+            elapsed = now - self._pc_kill_start_t
+            if elapsed >= self._pc_kill_wait:
+                logger.info(
+                    f"[HuntingSM] 사망 대기 완료 ({self._pc_kill_wait:.1f}s) "
+                    f"→ 아데나 스캔"
+                )
+                self._pc_state = "LOOT_SCAN"
+            return
+
+        # ── [LOOT_SCAN] 사망 후 아데나 OCR ──────────────────────────
+        if self._pc_state == "LOOT_SCAN":
+            loot = self.loot_detector.find(frame)
+            if loot:
+                logger.info(f"[HuntingSM] 아데나 {len(loot)}개 발견 → LOOTING")
+                self._loot_targets      = list(loot)
+                self._loot_idx          = 0
+                self._loot_start_t      = now
+                self._loot_return_state = HuntingState.HUNTING_10
+                self._enter(HuntingState.LOOTING)
+            else:
+                logger.info("[HuntingSM] 아데나 없음 → SCAN 재시도 (추가 적 탐지)")
+                self._pc_state = "SCAN"
+            return
 
     def _update_looting(self, frame: np.ndarray) -> None:
         """아데나를 하나씩 클릭."""
@@ -605,8 +692,15 @@ class HuntingStateMachine:
         if new_state == HuntingState.IDLE:
             self._teleport_fail_count = 0
         # HUNTING_10 재진입 시 순찰 재시작
+        # (서브상태 _pc_state는 처음에만 PATROL로 리셋 — LOOTING 복귀 시는 SCAN 유지)
         if new_state == HuntingState.HUNTING_10:
             self._patrol_started = False
+            # LOOTING에서 복귀하는 경우 SCAN 유지 (추가 아데나 확인)
+            if prev == HuntingState.LOOTING:
+                self._pc_state = "SCAN"
+            else:
+                self._pc_state        = "PATROL"
+                self._pc_attack_count = 0
 
     # ── 상태 조회 API ─────────────────────────────────────────────────────
 
