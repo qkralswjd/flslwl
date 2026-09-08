@@ -86,6 +86,8 @@
     "patrol_waypoints": {
         "_comment": "사냥터 내 순찰 동선. HUNTING_10 상태에서 loop=True로 반복 이동",
         "move_timeout_ms": 8000,
+        "stuck_check_ms": 1500,
+        "stuck_threshold": 2.0,
         "points": [
             {"x": 1521, "y": 353, "label": "1차 필드사냥 이동", "wait_ms": 500},
             {"x": 1497, "y": 404, "label": "2차 필드사냥 이동", "wait_ms": 500},
