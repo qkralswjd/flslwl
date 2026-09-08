@@ -191,17 +191,10 @@ class HuntingStateMachine:
         pwp_points  = pwp_cfg.get("points", wp_points)   # 없으면 hunt_waypoints 재사용
         pwp_timeout = pwp_cfg.get("move_timeout_ms", 8000)
         self.patrol_mover = WaypointMover(
-            waypoints            = pwp_points,
-            capture_offset       = self._cap_offset,
-            move_timeout_ms      = pwp_timeout,
-            loop                 = True,   # 사냥터 내 무한 순찰
-            stuck_skip           = True,
-            # baseline-relative 장애물 감지 파라미터
-            baseline_collect_ms  = pwp_cfg.get("baseline_collect_ms", 1500.0),
-            stuck_start_ratio    = pwp_cfg.get("stuck_start_ratio",   0.60),
-            stuck_ratio          = pwp_cfg.get("stuck_ratio",         0.25),
-            stuck_min_baseline   = pwp_cfg.get("stuck_min_baseline",  0.30),
-            stuck_max            = pwp_cfg.get("stuck_max",           3),
+            waypoints       = pwp_points,
+            capture_offset  = self._cap_offset,
+            move_timeout_ms = pwp_timeout,
+            loop            = True,   # 사냥터 내 무한 순찰
         )
         self._patrol_started = False  # HUNTING_10 진입 시 최초 1회 start()
 
@@ -476,13 +469,10 @@ class HuntingStateMachine:
             return
 
         # 웨이포인트 이동 tick
-        status = self.hunt_mover.tick(self.pico, frame=frame)
+        status = self.hunt_mover.tick(self.pico)
         if status == "ARRIVED":
             label = self.hunt_mover.current_label
             logger.info(f"[HuntingSM] 웨이포인트 '{label}' 도착 — 대기 중")
-        elif status == "STUCK":
-            label = self.hunt_mover.current_label
-            logger.warning(f"[HuntingSM] 이동 '{label}' 장애물 스킵")
         elif status == "DONE":
             logger.info("[HuntingSM] 사냥터 도착 완료 → HUNTING_10 전환")
             self._enter(HuntingState.HUNTING_10)
@@ -545,13 +535,10 @@ class HuntingStateMachine:
             return
 
         # ── 순찰 tick (몬스터 없을 때 이동) ──────────────────────────
-        status = self.patrol_mover.tick(self.pico, frame=frame)
+        status = self.patrol_mover.tick(self.pico)
         if status == "ARRIVED":
             label = self.patrol_mover.current_label
             logger.info(f"[HuntingSM] 순찰 '{label}' 도착")
-        elif status == "STUCK":
-            label = self.patrol_mover.current_label
-            logger.warning(f"[HuntingSM] 순찰 '{label}' 장애물 스킵")
 
     def _update_looting(self, frame: np.ndarray) -> None:
         """아데나를 하나씩 클릭."""
