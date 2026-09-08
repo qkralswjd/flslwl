@@ -86,8 +86,12 @@
     "patrol_waypoints": {
         "_comment": "사냥터 내 순찰 동선. HUNTING_10 상태에서 loop=True로 반복 이동",
         "move_timeout_ms": 8000,
-        "stuck_check_ms": 1500,
-        "stuck_threshold": 2.0,
+        "_comment_stuck": "baseline-relative 장애물 감지: 이동 시작 직후 1.5초 diff 평균을 baseline으로 삼아, 타임아웃 60% 이후에 diff가 baseline*0.25 이하로 3회 연속이면 장애물로 판정",
+        "baseline_collect_ms": 1500,
+        "stuck_start_ratio": 0.60,
+        "stuck_ratio": 0.25,
+        "stuck_min_baseline": 0.30,
+        "stuck_max": 3,
         "points": [
             {"x": 1521, "y": 353, "label": "1차 필드사냥 이동", "wait_ms": 500},
             {"x": 1497, "y": 404, "label": "2차 필드사냥 이동", "wait_ms": 500},

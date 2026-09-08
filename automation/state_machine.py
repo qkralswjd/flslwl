@@ -191,13 +191,17 @@ class HuntingStateMachine:
         pwp_points  = pwp_cfg.get("points", wp_points)   # 없으면 hunt_waypoints 재사용
         pwp_timeout = pwp_cfg.get("move_timeout_ms", 8000)
         self.patrol_mover = WaypointMover(
-            waypoints        = pwp_points,
-            capture_offset   = self._cap_offset,
-            move_timeout_ms  = pwp_timeout,
-            loop             = True,   # 사냥터 내 무한 순찰
-            stuck_check_ms   = pwp_cfg.get("stuck_check_ms",  1500.0),
-            stuck_threshold  = pwp_cfg.get("stuck_threshold", 2.0),
-            stuck_skip       = True,
+            waypoints            = pwp_points,
+            capture_offset       = self._cap_offset,
+            move_timeout_ms      = pwp_timeout,
+            loop                 = True,   # 사냥터 내 무한 순찰
+            stuck_skip           = True,
+            # baseline-relative 장애물 감지 파라미터
+            baseline_collect_ms  = pwp_cfg.get("baseline_collect_ms", 1500.0),
+            stuck_start_ratio    = pwp_cfg.get("stuck_start_ratio",   0.60),
+            stuck_ratio          = pwp_cfg.get("stuck_ratio",         0.25),
+            stuck_min_baseline   = pwp_cfg.get("stuck_min_baseline",  0.30),
+            stuck_max            = pwp_cfg.get("stuck_max",           3),
         )
         self._patrol_started = False  # HUNTING_10 진입 시 최초 1회 start()
 
