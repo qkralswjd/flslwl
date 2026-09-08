@@ -116,7 +116,7 @@ class WaypointMover:
 
         self._idx          = 0       # 현재 목표 웨이포인트 인덱스
         self._state        = "IDLE"  # IDLE / MOVING / WAITING / DONE
-        self._move_start_t = 0.0
+        self._move_start_t = 0.0    # 큐 투입 시각 (타임아웃 기준)
         self._wait_until_t = 0.0
 
         # ── 장애물 감지 내부 상태 ──────────────────────────────────
@@ -126,6 +126,9 @@ class WaypointMover:
         self._baseline_ready: bool            = False
         self._stuck_count: int                = 0
         self._next_check_t: float             = 0.0
+        # 클릭 ACK 대기: pico 큐가 비워진 후에 baseline 수집 시작
+        self._waiting_pico_idle: bool         = True  # True = 아직 큐 처리 대기 중
+        self._baseline_start_t: float         = 0.0   # 큐 비워진 시각
 
     # ── 공개 API ────────────────────────────────────────────────────
 
@@ -186,9 +189,27 @@ class WaypointMover:
             if frame is not None and self.stuck_skip:
                 diff = _frame_diff(self._prev_frame, frame)
 
-                # 단계 1: baseline 수집 (이동 직후 baseline_collect_ms 동안)
-                if not self._baseline_ready:
-                    if elapsed_ms <= self.baseline_collect_ms:
+                # 단계 0: pico 큐가 빌 때까지 대기 (실제 클릭 ACK 완료 시점 감지)
+                if self._waiting_pico_idle:
+                    pico_idle = getattr(pico_worker, "is_idle", True)
+                    if pico_idle:
+                        # 큐 처리 완료 → 이 시점부터 baseline 수집 시작
+                        self._waiting_pico_idle = False
+                        self._baseline_start_t  = now
+                        self._prev_frame        = frame.copy()
+                        logger.debug(
+                            f"[WaypointMover] '{self.current_label}' "
+                            f"Pico 처리 완료 → baseline 수집 시작 "
+                            f"(큐대기 {elapsed_ms:.0f}ms)"
+                        )
+                    # 아직 대기 중: frame만 갱신하고 체크 스킵
+                    else:
+                        self._prev_frame = frame.copy()
+
+                # 단계 1: baseline 수집 (Pico idle 후 baseline_collect_ms 동안)
+                elif not self._baseline_ready:
+                    baseline_elapsed = (now - self._baseline_start_t) * 1000.0
+                    if baseline_elapsed <= self.baseline_collect_ms:
                         if diff > 0.0:
                             self._baseline_samples.append(diff)
                     else:
@@ -249,12 +270,14 @@ class WaypointMover:
 
     def _reset_stuck_state(self) -> None:
         """장애물 감지 관련 상태 전체 초기화."""
-        self._prev_frame       = None
-        self._baseline_samples = []
-        self._baseline_avg     = 0.0
-        self._baseline_ready   = False
-        self._stuck_count      = 0
-        self._next_check_t     = 0.0
+        self._prev_frame          = None
+        self._baseline_samples    = []
+        self._baseline_avg        = 0.0
+        self._baseline_ready      = False
+        self._stuck_count         = 0
+        self._next_check_t        = 0.0
+        self._waiting_pico_idle   = True   # 새 이동 시작 → 큐 처리 대기 모드로
+        self._baseline_start_t    = 0.0
 
     def _init_stuck_for_move(
         self,

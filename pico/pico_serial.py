@@ -103,6 +103,15 @@ class PicoSerialWorker:
     def is_connected(self) -> bool:
         return self._is_connected
 
+    @property
+    def is_idle(self) -> bool:
+        """출력 큐가 비어 있으면 True (명령이 모두 처리됨).
+
+        WaypointMover가 클릭 ACK 완료 시점을 파악하는 데 사용합니다.
+        큐에 명령이 남아 있으면 Pico 워커 스레드가 아직 처리 중입니다.
+        """
+        return self._out_queue.empty()
+
     def start(self) -> None:
         """워커 스레드를 시작합니다."""
         if self._thread and self._thread.is_alive():
