@@ -96,13 +96,20 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     Args:
         mode: "leveling" → 1~10레벨 자동사냥 (드래그, HuntingStateMachine ON, 템플릿매칭 OFF)
               "dungeon"  → 던전 사냥 모드 (템플릿매칭 ON, HuntingStateMachine OFF)
+              "field"    → 필드 이동 사냥 모드 (WaypointMover + HuntingStateMachine ON,
+                           SceneMotionFilter + SequentialTargetSM 던전과 동일 파이프라인,
+                           tracker를 HuntingStateMachine에 주입 → IDLE일 때만 다음 WP 이동)
     """
     is_leveling = (mode == "leveling")
-    logger.info(f"=== 실행 모드: {'⚔ 1~10레벨 모드' if is_leveling else '🏰 던전 사냥 모드'} ===")
+    is_field    = (mode == "field")
+    mode_label  = {"leveling": "⚔ 1~10레벨 모드",
+                   "dungeon":  "🏰 던전 사냥 모드",
+                   "field":    "🗺 필드 이동 사냥 모드"}.get(mode, mode)
+    logger.info(f"=== 실행 모드: {mode_label} ===")
 
-    # ── HuntingStateMachine 초기화 (레벨링 모드만) ────────────────────
+    # ── HuntingStateMachine 초기화 (레벨링/필드 모드) ─────────────────
     hunting_sm = None
-    if is_leveling and automation_config is not None:
+    if (is_leveling or is_field) and automation_config is not None:
         try:
             from automation.state_machine import HuntingStateMachine
             _hunting_sm_config   = automation_config
@@ -163,17 +170,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     capturer = ScreenCapturer(config["monitor_index"], config.get("capture_region"))
 
     # capturer 생성 후 HuntingStateMachine 초기화 + 자동 시작
-    if _hunting_sm_pending and pico_worker:
-        from automation.state_machine import HuntingStateMachine
-        hunting_sm = HuntingStateMachine(
-            config        = _hunting_sm_config,
-            pico_worker   = pico_worker,
-            frame_grabber = capturer.grab,
-        )
-        hunting_sm.start()   # 자동으로 TELEPORTING 상태부터 시작
-        logger.info("[Automation] HuntingStateMachine 시작 — TELEPORTING")
-    elif _hunting_sm_pending and not pico_worker:
-        logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
+    # (field 모드는 tracker 생성 후 주입이 필요하므로 tracker 생성 뒤로 이동)
+    _hunting_sm_init_pending = _hunting_sm_pending  # tracker 생성 후 처리
     motion_detector = MotionDetector(
         blur_kernel=config["blur_kernel"],
         morph_kernel=config["morph_kernel"],
@@ -202,8 +200,28 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
         drag_steps              = pico_cfg.get("drag_steps", 8),
     )
 
+    # ── HuntingStateMachine 초기화 (tracker 생성 후 주입) ─────────────
+    if _hunting_sm_init_pending and pico_worker:
+        from automation.state_machine import HuntingStateMachine
+        # field 모드: tracker를 SM에 주입 → IDLE일 때만 WP 이동, SM이 공격 위임
+        _sm_tracker = tracker if is_field else None
+        hunting_sm = HuntingStateMachine(
+            config        = _hunting_sm_config,
+            pico_worker   = pico_worker,
+            frame_grabber = capturer.grab,
+            tracker       = _sm_tracker,
+        )
+        if is_field:
+            hunting_sm.start_at_hunt_zone()
+            logger.info("[Automation] HuntingStateMachine 시작 — field 모드 (MOVE_TO_HUNT_ZONE)")
+        else:
+            hunting_sm.start()   # leveling: TELEPORTING부터 시작
+            logger.info("[Automation] HuntingStateMachine 시작 — TELEPORTING")
+    elif _hunting_sm_init_pending and not pico_worker:
+        logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
+
     clf_config = config.get("classifier", {})
-    # 레벨링 모드에서는 템플릿 매칭 OFF
+    # 레벨링/필드 모드에서는 템플릿 매칭 OFF
     classifier = (
         MonsterClassifier(
             clf_config.get("templates_dir") or get_templates_dir(),
@@ -213,11 +231,13 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             excluded_color_ratio=clf_config.get("excluded_color_ratio", 0.2),
             min_size_ratio=clf_config.get("min_size_ratio", 0.6),
         )
-        if (clf_config.get("enabled") and not is_leveling)
+        if (clf_config.get("enabled") and not is_leveling and not is_field)
         else None
     )
     if is_leveling:
         logger.info("[Mode] 레벨링 모드: 템플릿 매칭 비활성화")
+    if is_field:
+        logger.info("[Mode] 필드 모드: 템플릿 매칭 비활성화 (MOG2+SceneFilter만 사용)")
 
     debug_view = (
         DebugView(motion_detector, contour_detector, WINDOW_NAME, classifier=classifier)
@@ -308,12 +328,15 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     dt = now - last_tracker_update
                     last_tracker_update = now
 
-                    # ── TargetSM 활성 여부: HUNTING_10일 때만 공격 허용 ──
-                    if hunting_sm is not None:
+                    # ── TargetSM 활성 여부 ────────────────────────────────
+                    # field 모드: state_machine이 tracker._sm.set_active()를 직접 제어
+                    #   → main.py에서 중복 설정하지 않음
+                    # leveling 모드: HUNTING_10일 때만 active
+                    # dungeon 모드 (hunting_sm=None): 항상 active(기본값 True)
+                    if hunting_sm is not None and not is_field:
                         from automation.state_machine import HuntingState
                         _is_hunting = (hunting_sm.state == HuntingState.HUNTING_10)
                         tracker._sm.set_active(_is_hunting)
-                    # hunting_sm 없는 dungeon 모드는 항상 active(기본값 True)
 
                     enemies = tracker.update(detections, dt if dt > 0 else 1e-3)
 
@@ -451,4 +474,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
 
 if __name__ == "__main__":
-    run(load_config())
+    import sys
+    _mode = "dungeon"
+    for _arg in sys.argv[1:]:
+        if _arg in ("dungeon", "leveling", "field"):
+            _mode = _arg
+            break
+    _auto_cfg = load_automation_config() if _mode in ("leveling", "field") else None
+    run(load_config(), automation_config=_auto_cfg, mode=_mode)

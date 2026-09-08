@@ -45,7 +45,7 @@
 import logging
 import time
 from enum import Enum, auto
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import numpy as np
 
@@ -54,6 +54,9 @@ from automation.level_reader   import LevelReader
 from automation.loot_detector  import LootDetector
 from automation.teleport_handler import TeleportHandler
 from automation.waypoint_mover import WaypointMover
+
+if TYPE_CHECKING:
+    from tracking.tracker import NearestNeighborTracker
 
 logger = logging.getLogger("hunting_sm")
 
@@ -104,12 +107,17 @@ class HuntingStateMachine:
         config: dict,
         pico_worker,
         frame_grabber: Callable[[], np.ndarray],
+        tracker: Optional["NearestNeighborTracker"] = None,
     ):
         """
         Args:
             config       : config_automation.json 내용
             pico_worker  : PicoSerialWorker 인스턴스
             frame_grabber: capturer.grab() 등 프레임 반환 함수
+            tracker      : NearestNeighborTracker (field 모드 시 주입).
+                           주입하면 HUNTING_10에서 SequentialTargetSM이 공격을 담당하고,
+                           tracker._sm.state == IDLE일 때만 다음 WP로 이동합니다.
+                           None이면 기존 직접 click+drag 방식 유지.
         """
         self.cfg  = config
         self.pico = pico_worker
@@ -250,6 +258,14 @@ class HuntingStateMachine:
         self.kills       = 0
         self.potions_used = 0
         self.start_time  = time.time()
+
+        # ── field 모드 Tracker 연동 ────────────────────────────────────
+        # tracker 주입 시: HUNTING_10에서 SequentialTargetSM이 공격 담당
+        #   - PATROL: tracker._sm.state == IDLE일 때만 patrol_mover.tick()
+        #   - SCAN  : tracker._sm.set_active(True) → SM이 공격 처리
+        #   - KILL_WAIT 대신 tracker._sm.state == IDLE 복귀 감지
+        # tracker=None 이면 기존 직접 click+drag 방식 유지
+        self._tracker = tracker
 
     # ── 공개 API ──────────────────────────────────────────────────────────
 
@@ -534,6 +550,14 @@ class HuntingStateMachine:
 
         # ── [PATROL] 이동 중 ─────────────────────────────────────────
         if self._pc_state == "PATROL":
+            # field 모드(tracker 있음): SequentialTargetSM이 IDLE일 때만 이동
+            # → 전투 중(LOCKING~COOLDOWN)에는 patrol_mover를 전진시키지 않음
+            if self._tracker is not None:
+                from tracking.tracker import TargetState
+                if self._tracker._sm.state != TargetState.IDLE:
+                    # 전투 중 — 이동 멈추고 적 처리 대기
+                    return
+
             status = self.patrol_mover.tick(self.pico)
             if status == "ARRIVED":
                 label = self.patrol_mover.current_label
@@ -544,6 +568,59 @@ class HuntingStateMachine:
 
         # ── [SCAN] 도착 지점 탐지 ────────────────────────────────────
         if self._pc_state == "SCAN":
+            # ── field 모드: tracker._sm에 공격 위임 ──────────────────
+            if self._tracker is not None:
+                from tracking.tracker import TargetState
+                sm = self._tracker._sm
+
+                # SM이 이미 전투 중(비IDLE) → 완료 대기
+                if sm.state != TargetState.IDLE:
+                    # 최대 공격 횟수 누적 (SM이 COOLDOWN→IDLE 할 때마다 카운트)
+                    return
+
+                # SM이 IDLE = 전투 완료 또는 적 없음
+                if enemies:
+                    # 적 있음 → SM 활성화해서 자동 공격 시작
+                    sm.set_active(True)
+                    self._pc_attack_count += 1
+                    logger.info(
+                        f"[HuntingSM][field] 적 {len(enemies)}명 감지 "
+                        f"→ SequentialTargetSM 공격 위임 "
+                        f"[{self._pc_attack_count}/{self._pc_max_attacks}]"
+                    )
+                    self._pc_kill_start_t = now
+                    self._pc_state = "KILL_WAIT"
+                    return
+
+                # 적 없음 → 아데나 체크
+                loot = self.loot_detector.find(frame)
+                if loot:
+                    logger.info(f"[HuntingSM][field] 아데나 {len(loot)}개 발견 → LOOTING")
+                    sm.set_active(False)
+                    self._loot_targets      = list(loot)
+                    self._loot_idx          = 0
+                    self._loot_start_t      = now
+                    self._loot_return_state = HuntingState.HUNTING_10
+                    self._enter(HuntingState.LOOTING)
+                    return
+
+                # 최대 공격 횟수 초과 or 적/아데나 없음 → 다음 WP
+                if self._pc_attack_count >= self._pc_max_attacks:
+                    logger.info(
+                        f"[HuntingSM][field] 공격 {self._pc_attack_count}회 완료 "
+                        f"→ 다음 WP"
+                    )
+                    sm.set_active(False)
+                    self._pc_state        = "PATROL"
+                    self._pc_attack_count = 0
+                    return
+
+                logger.info("[HuntingSM][field] 탐지 없음 → 다음 WP")
+                sm.set_active(False)
+                self._pc_state = "PATROL"
+                return
+
+            # ── 기존 모드(tracker=None): 직접 click+drag ─────────────
             # 최대 공격 횟수 초과 → 다음 WP로 진행
             if self._pc_attack_count >= self._pc_max_attacks:
                 logger.info(
@@ -603,6 +680,27 @@ class HuntingStateMachine:
 
         # ── [KILL_WAIT] 몬스터 사망 대기 ─────────────────────────────
         if self._pc_state == "KILL_WAIT":
+            # ── field 모드: tracker._sm이 IDLE로 돌아오면 전투 완료 ──
+            if self._tracker is not None:
+                from tracking.tracker import TargetState
+                sm = self._tracker._sm
+
+                # SM이 IDLE = 적 처리 완료 (또는 타임아웃)
+                if sm.state == TargetState.IDLE:
+                    logger.info("[HuntingSM][field] SequentialTargetSM IDLE → 아데나 스캔")
+                    self._pc_state = "LOOT_SCAN"
+                # 아직 전투 중이면 대기 (time-based 백업 타임아웃도 유지)
+                elapsed = now - self._pc_kill_start_t
+                if elapsed >= self._pc_kill_wait * 3:   # 기존 대기의 3배를 최대 한도
+                    logger.warning(
+                        f"[HuntingSM][field] KILL_WAIT 최대 대기 초과 "
+                        f"({self._pc_kill_wait * 3:.1f}s) → 강제 LOOT_SCAN"
+                    )
+                    sm.set_active(False)
+                    self._pc_state = "LOOT_SCAN"
+                return
+
+            # 기존 모드: 시간 기반 대기
             elapsed = now - self._pc_kill_start_t
             if elapsed >= self._pc_kill_wait:
                 logger.info(
@@ -614,6 +712,10 @@ class HuntingStateMachine:
 
         # ── [LOOT_SCAN] 사망 후 아데나 OCR ──────────────────────────
         if self._pc_state == "LOOT_SCAN":
+            # field 모드: 아데나 스캔 전 SM 비활성화 (루팅 중 공격 차단)
+            if self._tracker is not None:
+                self._tracker._sm.set_active(False)
+
             loot = self.loot_detector.find(frame)
             if loot:
                 logger.info(f"[HuntingSM] 아데나 {len(loot)}개 발견 → LOOTING")
@@ -701,6 +803,9 @@ class HuntingStateMachine:
             else:
                 self._pc_state        = "PATROL"
                 self._pc_attack_count = 0
+        # HUNTING_10 이탈 시 field 모드 tracker SM 비활성화
+        if prev == HuntingState.HUNTING_10 and getattr(self, "_tracker", None) is not None:
+            self._tracker._sm.set_active(False)
 
     # ── 상태 조회 API ─────────────────────────────────────────────────────
 

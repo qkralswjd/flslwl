@@ -1,28 +1,32 @@
-"""허수아비 공격 전용 실행 스크립트.
+"""허수아비/필드 자동사냥 실행 스크립트.
 
-1~5레벨 허수아비 단계를 텔레포트 없이 즉시 시작합니다.
-Pico가 연결돼 있으면 실제 드래그 공격이 실행됩니다.
+main.py의 run() 파이프라인을 그대로 사용합니다.
+(SceneMotionFilter + MOG2 + SVM + NearestNeighborTracker + SequentialTargetSM)
 
 실행:
-    python run_dummy.py
+    python run_dummy.py              # 기본: 허수아비 공격부터 시작 (leveling 모드)
+    python run_dummy.py --field      # 필드 이동 사냥 (field 모드, WaypointMover 연동)
+    python run_dummy.py --full       # 허수아비 10초 후 강제 사냥터 전환 (leveling 모드)
+    python run_dummy.py --waypoint   # 웨이포인트 이동 테스트 (field 모드)
 
 종료:
-    Ctrl+C
+    OpenCV 창에서 'q' 키  또는  Ctrl+C
 
-동작:
-    - ATTACKING_DUMMY 상태로 즉시 진입
-    - drag_from → drag_to 방향으로 attack_interval_ms마다 드래그
-    - 레벨이 target_level_dummy(기본 5) 이상이면 자동 종료
-    - hp < threshold_pct(기본 50%)이면 USE_POTION 결정 출력
+모드 설명:
+    leveling (기본/--full):
+        HuntingStateMachine.start_at_dummy() → ATTACKING_DUMMY → ... → HUNTING_10
+        허수아비 단계부터 자동 진행, 목표 레벨 도달 시 종료.
+
+    field (--field/--waypoint):
+        HuntingStateMachine.start_at_hunt_zone() → MOVE_TO_HUNT_ZONE → HUNTING_10
+        patrol_waypoints 순찰하며 몬스터 탐지 + SequentialTargetSM 공격.
+        tracker._sm.state == IDLE일 때만 다음 WP로 이동.
 """
 
-import json
 import logging
 import os
 import sys
-import time
 
-# ── 로깅 설정 ──────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(message)s",
@@ -31,212 +35,55 @@ logging.basicConfig(
 logger = logging.getLogger("run_dummy")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-
-
-def load_json(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+sys.path.insert(0, HERE)
 
 
 def main():
-    # ── 설정 로드 ──────────────────────────────────────────────────────
-    cfg_path      = os.path.join(HERE, "config", "config.json")
-    auto_cfg_path = os.path.join(HERE, "config", "config_automation.json")
+    from config.config_loader import load_config
+    from main import load_automation_config, run
 
-    config   = load_json(cfg_path)
-    auto_cfg = load_json(auto_cfg_path)
+    config   = load_config()
+    auto_cfg = load_automation_config()
 
-    dummy_cfg = auto_cfg.get("dummy", {})
-    logger.info("=== run_dummy.py 시작 ===")
-    logger.info(f"  drag_from      : {dummy_cfg.get('drag_from')}")
-    logger.info(f"  drag_to        : {dummy_cfg.get('drag_to')}")
-    logger.info(f"  attack_interval: {dummy_cfg.get('attack_interval_ms')}ms")
-    logger.info(f"  target_level   : Lv.{auto_cfg.get('level_ocr',{}).get('target_level_dummy',5)}")
+    if auto_cfg is None:
+        logger.error("config_automation.json 을 찾을 수 없습니다. 종료합니다.")
+        sys.exit(1)
 
-    # ── monitor_index 먼저 로드 (Pico 오프셋 계산에 필요) ───────────────
-    monitor_index = config.get("monitor_index", 2)
+    # ── 실행 모드 결정 ──────────────────────────────────────────────────
+    args = sys.argv[1:]
 
-    # ── Pico 연결 ──────────────────────────────────────────────────────
-    pico_cfg = config.get("pico", {})
-    pico_enabled = pico_cfg.get("enabled", False)
-
-    if pico_enabled:
-        try:
-            from pico.pico_serial import PicoSerialWorker
-            import mss as _mss
-            with _mss.MSS() as _sct:
-                _monitors = _sct.monitors
-                _mon = _monitors[monitor_index] if monitor_index < len(_monitors) else _monitors[1]
-                mon_left = _mon["left"]
-                mon_top  = _mon["top"]
-            logger.info(f"  모니터 오프셋: left={mon_left}, top={mon_top}")
-
-            port     = pico_cfg.get("serial_port", pico_cfg.get("port", "COM4"))
-            baudrate = pico_cfg.get("baudrate", 115200)
-            pico     = PicoSerialWorker(
-                port=port,
-                baudrate=baudrate,
-                on_log=lambda lv, msg: logger.info(f"  [Pico/{lv}] {msg}"),
-                on_command_result=lambda cmd, ok: logger.info(f"  [Pico] {cmd} → {'OK' if ok else 'FAIL'}"),
-                monitor_offset_x=mon_left,
-                monitor_offset_y=mon_top,
-            )
-            pico.start()
-            time.sleep(1.0)   # 연결 안정화 대기
-            logger.info(f"  Pico 연결: {port} @ {baudrate}  is_connected={pico.is_connected}")
-        except Exception as e:
-            logger.warning(f"  Pico 연결 실패: {e} → NullPicoWorker 사용")
-            from pico.null_pico import NullPicoWorker
-            pico = NullPicoWorker()
+    if "--field" in args or "--waypoint" in args:
+        mode = "field"
+        logger.info("=== run_dummy.py [field 모드] — WaypointMover + SequentialTargetSM ===")
+        logger.info("  patrol_waypoints 순찰 중 몬스터 탐지 + 자동 공격")
+        logger.info("  tracker._sm.state == IDLE일 때만 다음 WP 이동")
+    elif "--full" in args:
+        mode = "leveling"
+        # --full: target_level_dummy를 999로 막고 10초 후 강제 전환은
+        #         main.py 루프가 없으므로 HuntingStateMachine 내부 흐름에 맡김
+        auto_cfg.setdefault("level_ocr", {})
+        auto_cfg["level_ocr"]["target_level_dummy"] = 999
+        logger.info("=== run_dummy.py [leveling 모드 --full] — 허수아비 → 사냥터 ===")
+        logger.info("  target_level_dummy=999 (레벨 달성 없이 사냥터 자동 전환)")
     else:
-        logger.info("  Pico 비활성화 → NullPicoWorker (Dry-Run)")
-        from pico.null_pico import NullPicoWorker
-        pico = NullPicoWorker()
+        mode = "leveling"
+        logger.info("=== run_dummy.py [leveling 모드] — 허수아비 공격부터 시작 ===")
 
-    # ── ScreenCapturer ─────────────────────────────────────────────────
-    from capture.screen_capture import ScreenCapturer
-    capturer = ScreenCapturer(monitor_index=monitor_index)
-    logger.info(f"  monitor_index  : {monitor_index}")
-
-    # ── 몬스터 탐지 파이프라인 (HUNTING_10 순찰 중 사용) ───────────────
-    from detection.motion_detector import MotionDetector
-    from detection.contour_detector import ContourDetector
-    from detection.classifier import MonsterClassifier
-    from paths import get_templates_dir, get_reject_templates_dir
-
-    motion_detector  = MotionDetector(
-        blur_kernel  = config.get("blur_kernel", 5),
-        morph_kernel = config.get("morph_kernel", 5),
-        **config.get("motion", {}),
-    )
-    contour_detector = ContourDetector(
-        config.get("min_area", 100),
-        config.get("max_area", 50000),
-    )
-    clf_cfg    = config.get("classifier", {})
-    classifier = MonsterClassifier(
-        templates_dir        = clf_cfg.get("templates_dir") or get_templates_dir(),
-        reject_templates_dir = clf_cfg.get("reject_templates_dir") or get_reject_templates_dir(),
-        confidence_threshold = clf_cfg.get("confidence_threshold", 0.5),
-        excluded_color_ranges= clf_cfg.get("excluded_color_ranges"),
-        excluded_color_ratio = clf_cfg.get("excluded_color_ratio", 0.2),
-        min_size_ratio       = clf_cfg.get("min_size_ratio", 0.6),
-    )
-    logger.info(f"  [탐지] 템플릿: {clf_cfg.get('templates_dir', get_templates_dir())}")
-
-    roi_cfg  = config.get("roi")
-    roi_dict = roi_cfg if roi_cfg else None
-
-    # ── HuntingStateMachine ────────────────────────────────────────────
-    from automation.state_machine import HuntingStateMachine, HuntingState
-
-    sm = HuntingStateMachine(
-        config        = auto_cfg,
-        pico_worker   = pico,
-        frame_grabber = capturer.grab,
-    )
-
-    # 실행 모드 선택
-    waypoint_test = "--waypoint" in sys.argv
-
-    full_test = "--full" in sys.argv
-
-    if waypoint_test:
-        # 웨이포인트 이동만 테스트 (허수아비 생략)
-        wp_cfg = auto_cfg.get("hunt_waypoints", {})
-        logger.info("  [MODE] 웨이포인트 이동 테스트")
-        logger.info(f"  웨이포인트 {len(wp_cfg.get('points',[]))}개, 대기 {wp_cfg.get('move_timeout_ms',8000)//1000}초/구간")
-        sm.start_at_hunt_zone()
-        logger.info("  start_at_hunt_zone() 호출 → MOVE_TO_HUNT_ZONE 진입")
-    elif full_test:
-        # 허수아비 10초 공격 후 강제 사냥터 이동 테스트
-        sm.target_level_dummy = 999  # 레벨 달성 방지
-        logger.info("  [MODE] 풀 테스트 (허수아비 10초 → 사냥터 이동)")
-        logger.info("  target_level_dummy=999 (10초 후 강제 전환)")
-        sm.start_at_dummy()
-        logger.info("  start_at_dummy() 호출 → ATTACKING_DUMMY 진입")
-    else:
-        # 허수아비 공격부터 시작 (기본)
-        sm.start_at_dummy()
-        logger.info("  start_at_dummy() 호출 → ATTACKING_DUMMY 진입")
-
-    logger.info("  Ctrl+C 로 종료")
+    auto_cfg_path_info = os.path.join(HERE, "config", "config_automation.json")
+    logger.info(f"  config          : {os.path.join(HERE, 'config', 'config.json')}")
+    logger.info(f"  automation_cfg  : {auto_cfg_path_info}")
+    logger.info(f"  mode            : {mode}")
+    logger.info("  'q' 키로 종료 | OpenCV 창")
     logger.info("=" * 50)
 
-    # ── 메인 루프 ──────────────────────────────────────────────────────
-    _diag_counter  = 0
-    _start_t       = time.time()
-    _full_switched = False
-    _enemies       = []   # 탐지된 적 목록 (HUNTING_10일 때만 갱신)
-    try:
-        while True:
-            frame  = capturer.grab()
-            state  = sm.get_status().get("state", "?")
-
-            # ── HUNTING_10 상태일 때만 탐지 실행 ──────────────────────
-            if state == "HUNTING_10":
-                roi_frame = frame
-                if roi_dict:
-                    x, y, w, h = roi_dict["x"], roi_dict["y"], roi_dict["width"], roi_dict["height"]
-                    roi_frame = frame[y:y+h, x:x+w]
-
-                mask       = motion_detector.get_mask(roi_frame, learning_rate=-1.0)
-                detections = contour_detector.detect(mask)
-
-                # detection_zone 필터
-                dz = config.get("detection_zone")
-                if dz and dz.get("enabled", False):
-                    cx, cy = dz.get("center_x", 960), dz.get("center_y", 540)
-                    hw, hh = dz.get("half_width", 600), dz.get("half_height", 400)
-                    detections = [
-                        d for d in detections
-                        if (cx - hw) <= d.center_x <= (cx + hw)
-                        and (cy - hh) <= d.center_y <= (cy + hh)
-                    ]
-
-                detections = classifier.confirm(detections, roi_frame)
-                _enemies   = detections
-                if _enemies:
-                    logger.info(f"  [탐지] 몬스터 {len(_enemies)}개 발견")
-            else:
-                _enemies = []
-
-            sm.update(frame, enemies=_enemies)
-
-            status = sm.get_status()
-
-            # --full 모드: 10초 후 강제 사냥터 이동 전환
-            if full_test and not _full_switched and time.time() - _start_t >= 10.0:
-                if state == "ATTACKING_DUMMY":
-                    logger.info("  [FULL] 10초 경과 → 강제 사냥터 이동 전환")
-                    from automation.state_machine import HuntingState
-                    sm._enter(HuntingState.USE_SPEED_POTION)
-                    _full_switched = True
-
-            # 3초마다 Pico 스레드 상태 출력
-            _diag_counter += 1
-            if _diag_counter % 60 == 0 and pico_enabled:
-                thread = getattr(pico, "_thread", None)
-                alive  = thread.is_alive() if thread else False
-                qsize  = getattr(pico, "_out_queue", None)
-                qsize  = qsize.qsize() if qsize else -1
-                conn   = pico.is_connected
-                logger.info(f"  [DIAG] thread_alive={alive} queue={qsize} is_connected={conn}")
-
-            # 완료 또는 IDLE(오류) 감지
-            if state in ("DONE_PHASE1", "IDLE"):
-                logger.info(f"  상태: {state} → 종료")
-                break
-
-            time.sleep(0.05)   # 50ms 간격 (20fps)
-
-    except KeyboardInterrupt:
-        logger.info("  Ctrl+C — 종료")
-    finally:
-        capturer.close()
-        if pico_enabled and hasattr(pico, "stop"):
-            pico.stop()
-        logger.info("=== run_dummy.py 종료 ===")
+    # ── main.py run() 호출 — 탐지 파이프라인 공용 ────────────────────
+    # SceneMotionFilter + MOG2 + NearestNeighborTracker + SequentialTargetSM
+    # HuntingStateMachine (tracker 주입, field 모드 시)
+    run(
+        config            = config,
+        automation_config = auto_cfg,
+        mode              = mode,
+    )
 
 
 if __name__ == "__main__":
