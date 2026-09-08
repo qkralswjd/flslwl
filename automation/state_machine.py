@@ -175,7 +175,7 @@ class HuntingStateMachine:
         self._last_dummy_atk     = 0.0
         self._dummy_drag_done    = False  # 드래그 1회만 실행
 
-        # ── 사냥터 웨이포인트 무버 ─────────────────────────────────────
+        # ── 사냥터 웨이포인트 무버 (hunt_waypoints → HUNTING_10 진입용, loop=False) ──
         hwp_cfg   = config.get("hunt_waypoints", {})
         wp_points = hwp_cfg.get("points", [{"x":960,"y":400,"label":"사냥터-A","wait_ms":2000}])
         wp_timeout = hwp_cfg.get("move_timeout_ms", 5000)
@@ -183,8 +183,20 @@ class HuntingStateMachine:
             waypoints       = wp_points,
             capture_offset  = self._cap_offset,
             move_timeout_ms = wp_timeout,
-            loop            = False,  # 6번째 도착 후 HUNTING_10으로 전환
+            loop            = False,
         )
+
+        # ── 사냥터 순찰 무버 (patrol_waypoints → HUNTING_10 내부 루프, loop=True) ──
+        pwp_cfg     = config.get("patrol_waypoints", {})
+        pwp_points  = pwp_cfg.get("points", wp_points)   # 없으면 hunt_waypoints 재사용
+        pwp_timeout = pwp_cfg.get("move_timeout_ms", 8000)
+        self.patrol_mover = WaypointMover(
+            waypoints       = pwp_points,
+            capture_offset  = self._cap_offset,
+            move_timeout_ms = pwp_timeout,
+            loop            = True,   # 사냥터 내 무한 순찰
+        )
+        self._patrol_started = False  # HUNTING_10 진입 시 최초 1회 start()
 
         # ── 아데나 탐지기 ─────────────────────────────────────────────
         loot_cfg = config.get("loot", {})
@@ -468,43 +480,43 @@ class HuntingStateMachine:
     def _update_hunting_10(
         self, frame: np.ndarray, enemies: list
     ) -> None:
-        """사냥터 사냥. 아데나 탐지, Lv.target_level_hunt 달성 시 DONE_PHASE1."""
+        """사냥터 사냥. 순찰 중 아데나 탐지, Lv.target_level_hunt 달성 시 DONE_PHASE1."""
         now = time.time()
 
-        # 레벨 체크 → 10레벨 달성 = 1단계 완료
+        # ── 최초 진입 시 순찰 시작 ─────────────────────────────────────
+        if not self._patrol_started:
+            self.patrol_mover.start()
+            self._patrol_started = True
+            logger.info("[HuntingSM] 순찰 시작 (patrol_waypoints loop)")
+
+        # ── 레벨 체크 → 10레벨 달성 = 1단계 완료 ─────────────────────
         level = self.level_reader.read(frame)
         if level is not None and level >= self.target_level_hunt:
             logger.info(
-                f"[HuntingSM] 🎉 Lv.{level} 달성! "
+                f"[HuntingSM] Lv.{level} 달성! "
                 f"(목표 Lv.{self.target_level_hunt}) "
                 f"→ 1단계 완료"
             )
             self._enter(HuntingState.DONE_PHASE1)
             return
 
-        # 적 있으면 타임스탬프 갱신
-        if enemies:
-            self._last_enemy_seen_t = now
-        else:
-            # 적 없이 idle_timeout 초과 → 웨이포인트 이동
-            idle_s = now - self._last_enemy_seen_t
-            if idle_s >= self._hunt_idle_timeout:
-                logger.info(
-                    f"[HuntingSM] 적 없음 {idle_s:.0f}s "
-                    f"→ 웨이포인트 이동 재개"
-                )
-                self._enter(HuntingState.MOVE_TO_HUNT_ZONE)
-                return
-
-        # 아데나 탐지 → LOOTING
+        # ── 아데나 탐지 → LOOTING ──────────────────────────────────────
         loot = self.loot_detector.find(frame)
         if loot:
             logger.info(f"[HuntingSM] 아데나 {len(loot)}개 발견 → LOOTING")
-            self._loot_targets       = list(loot)
-            self._loot_idx           = 0
-            self._loot_start_t       = now
-            self._loot_return_state  = HuntingState.HUNTING_10
+            self._loot_targets      = list(loot)
+            self._loot_idx          = 0
+            self._loot_start_t      = now
+            self._loot_return_state = HuntingState.HUNTING_10
             self._enter(HuntingState.LOOTING)
+            return
+
+        # ── 순찰 tick (enemies 없을 때만 이동) ────────────────────────
+        # 나중에 몬스터 탐지 추가 시: enemies 있으면 이 블록 skip → 공격 로직으로
+        status = self.patrol_mover.tick(self.pico)
+        if status == "ARRIVED":
+            label = self.patrol_mover.current_label
+            logger.info(f"[HuntingSM] 순찰 '{label}' 도착")
 
     def _update_looting(self, frame: np.ndarray) -> None:
         """아데나를 하나씩 클릭."""
@@ -570,6 +582,9 @@ class HuntingStateMachine:
         # IDLE 전환(stop/복구): fail_count 리셋 (다음 start() 때 깨끗하게 시작)
         if new_state == HuntingState.IDLE:
             self._teleport_fail_count = 0
+        # HUNTING_10 재진입 시 순찰 재시작
+        if new_state == HuntingState.HUNTING_10:
+            self._patrol_started = False
 
     # ── 상태 조회 API ─────────────────────────────────────────────────────
 
@@ -579,9 +594,10 @@ class HuntingStateMachine:
         hp_pct = self.hp_reader.get_cached()
 
         waypoint = "-"
-        if self.state in (HuntingState.MOVE_TO_HUNT_ZONE,
-                          HuntingState.HUNTING_10):
+        if self.state == HuntingState.MOVE_TO_HUNT_ZONE:
             waypoint = self.hunt_mover.current_label
+        elif self.state == HuntingState.HUNTING_10:
+            waypoint = self.patrol_mover.current_label
 
         return {
             "state":        self.state.name,

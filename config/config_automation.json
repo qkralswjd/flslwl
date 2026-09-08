@@ -83,6 +83,17 @@
             {"x": 1604, "y": 357, "label": "7차이동(사냥터도착)", "wait_ms": 500}
         ]
     },
+    "patrol_waypoints": {
+        "_comment": "사냥터 내 순찰 동선. HUNTING_10 상태에서 loop=True로 반복 이동",
+        "move_timeout_ms": 8000,
+        "points": [
+            {"x": 1521, "y": 353, "label": "1차 필드사냥 이동", "wait_ms": 500},
+            {"x": 1497, "y": 404, "label": "2차 필드사냥 이동", "wait_ms": 500},
+            {"x": 1131, "y": 35,  "label": "3차 필드사냥 이동", "wait_ms": 500},
+            {"x": 1395, "y": 133, "label": "4차 필드사냥 이동", "wait_ms": 500},
+            {"x": 1470, "y": 90,  "label": "5차 필드사냥 이동", "wait_ms": 500}
+        ]
+    },
     "loot": {
         "_comment": "아데나 줍기 설정",
         "scan_region": {
