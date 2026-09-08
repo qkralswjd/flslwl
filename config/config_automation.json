@@ -39,8 +39,8 @@
             "height": 30
         },
         "read_interval_s": 2.0,
-        "target_level_dummy": 5,
-        "target_level_hunt": 10
+        "target_level_dummy": 999,
+        "target_level_hunt": 999
     },
     "scroll_dummy": {
         "_comment": "F6 말하는 두루마리 → 허수아비 수련장 텔레포트 설정",
