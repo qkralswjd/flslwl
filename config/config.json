@@ -1,5 +1,7 @@
 {
     "monitor_index": 2,
+    "window_x": 0,
+    "window_y": 0,
     "capture_region": {
         "x": 0,
         "y": 0,

@@ -259,6 +259,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     is_moving            = False   # SceneMotionFilter 결과
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    # 창을 지정 모니터로 이동 (window_monitor_x/y 설정 기준)
+    # config.json: "window_x": 0, "window_y": 0 → 모니터 1 좌상단
+    win_x = config.get("window_x", 0)
+    win_y = config.get("window_y", 0)
+    cv2.moveWindow(WINDOW_NAME, win_x, win_y)
     if debug_view:
         debug_view.create_trackbars()
 
