@@ -215,8 +215,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             hunting_sm.start_at_hunt_zone()
             logger.info("[Automation] HuntingStateMachine 시작 — field 모드 (MOVE_TO_HUNT_ZONE)")
         else:
-            hunting_sm.start()   # leveling: TELEPORTING부터 시작
-            logger.info("[Automation] HuntingStateMachine 시작 — TELEPORTING")
+            hunting_sm.start_at_dummy()   # leveling: 허수아비 공격부터 시작
+            logger.info("[Automation] HuntingStateMachine 시작 — ATTACKING_DUMMY")
     elif _hunting_sm_init_pending and not pico_worker:
         logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
 
