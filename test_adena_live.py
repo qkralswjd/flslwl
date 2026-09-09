@@ -4,49 +4,51 @@
     python test_adena_live.py              # 실시간 화면 캡처로 테스트
     python test_adena_live.py image.png    # 이미지 파일로 테스트
 
-파이프라인 (adena_crop.png 실측 최적화):
-    1. 흰 테두리 HSV 마스크 (S<50, V>200)
-    2. 7×7 dilation × 3 → 이름표 전체 박스 연결
-    3. w>30 & h>10 필터 (노이즈 제거)
-    4. 4배 업스케일 + thresh=135 역방향 이진화
-    5. easyocr (ko+en) 또는 tesseract psm=6 kor+eng
+속도 전략:
+    - 메인 루프: HSV 박스 탐지만 (빠름, ~10ms)
+    - OCR: 별도 스레드에서 비동기 처리
+    - 박스 위치가 이전과 같으면 OCR 재사용 (캐시)
+    - 탐지 확정 시 2단계 클릭 (1차 이동+클릭 → 대기 → 2차 클릭)
 """
 
 import sys
 import cv2
 import numpy as np
 import time
+import threading
+import queue
 
 # ── 설정 ──────────────────────────────────────────────────────────
-SCAN_REGION    = {"x": 0, "y": 0, "width": 1920, "height": 850}  # 스캔 영역
+SCAN_REGION    = {"x": 0, "y": 0, "width": 1920, "height": 850}
 KEYWORDS       = ["아데나", "데나", "Adena", "adena", "ADENA"]
-MIN_CONFIDENCE = 0.03   # easyocr 신뢰도 하한 (낮게 설정 — OCR 오인식 허용)
-CLICK_DELAY    = 0.3    # 클릭 후 대기 시간 (초)
-CLICK_ENABLED  = True   # False 로 바꾸면 클릭 없이 탐지만
-HOVER_DELAY    = 0.25   # 1차 클릭 후 노란색 변환 대기 (초)
-CLICK2_DELAY   = 0.1    # 2차 클릭 후 대기 (초)
+MIN_CONFIDENCE = 0.03    # easyocr 신뢰도 하한
 
-# 박스 추출 파라미터 (adena_crop.png 실측)
-WHITE_LOWER = (0,   0,   200)   # 흰 테두리 HSV 하한 (S<50, V>200)
-WHITE_UPPER = (180, 50,  255)   # 흰 테두리 HSV 상한
-DILATION_K  = 7                 # dilation 커널 크기 (7×7)
-DILATION_IT = 3                 # dilation 반복 횟수
-BOX_MIN_W   = 30                # 최소 박스 너비 (px)
-BOX_MIN_H   = 10                # 최소 박스 높이 (px)
-BOX_PAD     = 4                 # 박스 여백 (px)
+# 클릭 설정
+CLICK_ENABLED  = True    # C키로 토글 가능
+HOVER_DELAY    = 0.25    # 1차 클릭 후 노란색 변환 대기 (초)
+CLICK2_DELAY   = 0.1     # 2차 클릭 후 대기 (초)
 
-# 전처리 파라미터 (thresh=130~145 최적 - 실측)
-SCALE       = 4                 # 업스케일 배율
-THRESH_VAL  = 135               # 이진화 임계값 (adena_crop.png 기준 최적)
+# 박스 추출 파라미터
+WHITE_LOWER = (0,   0,   200)
+WHITE_UPPER = (180, 50,  255)
+DILATION_K  = 7
+DILATION_IT = 3
+BOX_MIN_W   = 30
+BOX_MIN_H   = 10
+BOX_PAD     = 4
+
+# 전처리 파라미터
+SCALE       = 4
+THRESH_VAL  = 135
 # ─────────────────────────────────────────────────────────────────
 
 
+# ── 클릭 ─────────────────────────────────────────────────────────
 def get_clicker():
-    """클릭 라이브러리 초기화 — pydirectinput 우선, 없으면 pyautogui"""
     try:
         import pydirectinput
         pydirectinput.FAILSAFE = False
-        print("[클릭] pydirectinput 사용 (DirectInput — 게임 호환)")
+        print("[클릭] pydirectinput 사용")
         return "pydirectinput", pydirectinput
     except ImportError:
         pass
@@ -57,275 +59,300 @@ def get_clicker():
         return "pyautogui", pyautogui
     except ImportError:
         pass
-    print("[경고] 클릭 라이브러리 없음 — 탐지만 수행")
-    print("       pip install pydirectinput   # 게임 권장")
-    print("       pip install pyautogui       # 일반 앱")
+    print("[경고] 클릭 라이브러리 없음")
     return None, None
 
 
 def do_click(clicker_type, clicker, x: int, y: int):
-    """
-    아데나 줍기 2단계 클릭:
-      1차 클릭 → 마우스 호버 → 글씨 노란색으로 변환
-      HOVER_DELAY 대기 (노란색 변환 기다림)
-      2차 클릭 → 실제 줍기
-    """
+    """2단계 클릭: 이동 → 1차 클릭 → 대기 → 2차 클릭"""
     if clicker is None or not CLICK_ENABLED:
         return
 
-    # 1차 클릭 (호버 유발)
     if clicker_type == "pydirectinput":
-        clicker.click(x, y)
+        # pydirectinput: moveTo 먼저, 그 다음 click
+        clicker.moveTo(x, y)
+        time.sleep(0.05)
+        clicker.click()          # 1차
+        time.sleep(HOVER_DELAY)
+        clicker.click()          # 2차
     else:
+        # pyautogui: click(x, y)로 이동+클릭 동시
         clicker.click(x, y)
-
-    time.sleep(HOVER_DELAY)   # 노란색 변환 대기
-
-    # 2차 클릭 (줍기)
-    if clicker_type == "pydirectinput":
-        clicker.click(x, y)
-    else:
+        time.sleep(HOVER_DELAY)
         clicker.click(x, y)
 
     time.sleep(CLICK2_DELAY)
+    print(f"  🖱️  클릭 완료: ({x}, {y})")
 
 
+# ── OCR ──────────────────────────────────────────────────────────
 def get_ocr():
-    """easyocr 또는 tesseract 초기화"""
     try:
         import easyocr
-        print("[OCR] easyocr 초기화 중... (첫 실행 시 시간 걸림)")
+        print("[OCR] easyocr 초기화 중...")
         reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
         print("[OCR] easyocr 준비 완료")
         return "easyocr", reader
     except ImportError:
         pass
-
     try:
         import pytesseract
-        print("[OCR] tesseract 사용 (psm=6, kor+eng)")
+        print("[OCR] tesseract 사용")
         return "tesseract", pytesseract
     except ImportError:
         pass
-
-    print("[ERROR] easyocr 또는 pytesseract 중 하나를 설치하세요")
-    print("        pip install easyocr")
+    print("[ERROR] easyocr 또는 pytesseract를 설치하세요")
     sys.exit(1)
 
 
-def capture_screen(region):
-    """화면 캡처 (mss 사용)"""
-    try:
-        import mss
-        with mss.mss() as sct:
-            mon = {
-                "left":   region["x"],
-                "top":    region["y"],
-                "width":  region["width"],
-                "height": region["height"],
-            }
-            shot = sct.grab(mon)
-            frame = np.array(shot)
-            return cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-    except ImportError:
-        print("[ERROR] mss 미설치: pip install mss")
-        sys.exit(1)
+def preprocess(patch):
+    h, w = patch.shape[:2]
+    big  = cv2.resize(patch, (w * SCALE, h * SCALE), interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
+    _, t = cv2.threshold(gray, THRESH_VAL, 255, cv2.THRESH_BINARY_INV)
+    return cv2.cvtColor(t, cv2.COLOR_GRAY2BGR)
 
 
+def do_ocr(ocr_type, ocr, img_bgr):
+    """OCR → [(text, conf), ...]"""
+    if ocr_type == "easyocr":
+        raw = ocr.readtext(img_bgr, detail=1, paragraph=False)
+        return [(t, c) for (_, t, c) in raw]
+    else:
+        from PIL import Image as PILImage
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+        pil  = PILImage.fromarray(gray)
+        results = []
+        for psm in [11, 6]:
+            text = ocr.image_to_string(pil, lang="kor+eng",
+                                       config=f"--psm {psm} --oem 1").strip()
+            if text:
+                results.append((text, 0.8))
+        return results
+
+
+def is_adena(text, conf):
+    if conf < MIN_CONFIDENCE:
+        return False
+    return any(kw.lower() in text.lower() for kw in KEYWORDS)
+
+
+# ── 박스 추출 ─────────────────────────────────────────────────────
 def extract_candidate_boxes(crop_bgr):
-    """
-    아데나 이름표 후보 박스 추출 (dilation 기반)
-
-    전략:
-    - 흰 테두리(HSV S<50, V>200)를 마스크로 추출
-    - 7×7 kernel dilation × 3 → 얇은 테두리 선들을 하나의 덩어리로 연결
-    - bounding rect → w>30 & h>10 조건으로 노이즈 제거
-
-    Returns:
-        [(x, y, w, h), ...] 스캔 영역 내 상대 좌표
-    """
-    hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
-
-    # 흰 테두리 마스크 (adena_crop.png 실측: S<50, V>200)
-    mask = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
-
-    # dilation으로 얇은 테두리 선들을 연결 → 이름표 전체 영역 확장
-    kernel = np.ones((DILATION_K, DILATION_K), np.uint8)
+    hsv     = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+    mask    = cv2.inRange(hsv, WHITE_LOWER, WHITE_UPPER)
+    kernel  = np.ones((DILATION_K, DILATION_K), np.uint8)
     dilated = cv2.dilate(mask, kernel, iterations=DILATION_IT)
-
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     h_img, w_img = crop_bgr.shape[:2]
     boxes = []
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-        # 작은 노이즈 제거
         if w < BOX_MIN_W or h < BOX_MIN_H:
             continue
-        # 패딩 추가 (글씨가 박스 경계에 걸리지 않도록)
-        x1 = max(0, x - BOX_PAD)
-        y1 = max(0, y - BOX_PAD)
-        x2 = min(w_img, x + w + BOX_PAD)
-        y2 = min(h_img, y + h + BOX_PAD)
-        boxes.append((x1, y1, x2 - x1, y2 - y1))
-
+        x1 = max(0, x - BOX_PAD);  y1 = max(0, y - BOX_PAD)
+        x2 = min(w_img, x+w+BOX_PAD); y2 = min(h_img, y+h+BOX_PAD)
+        boxes.append((x1, y1, x2-x1, y2-y1))
     return boxes
 
 
-def preprocess(patch):
-    """
-    4배 업스케일 + 고정 임계값 역방향 이진화
-
-    실측 최적 파라미터 (adena_crop.png 기준):
-    - 배경: V≈50~100 (어두운 반투명)
-    - 글씨: V≈130~165 (회색/은색)
-    - 흰 테두리: V≥200
-    - thresh=135: 배경(V<135)→흰색, 글씨(V≥135)→검은색으로 반전
-      → 테서랙트/easyocr에 적합한 '흰 배경에 검은 글씨' 형태
-    """
-    h, w = patch.shape[:2]
-    big = cv2.resize(patch, (w * SCALE, h * SCALE), interpolation=cv2.INTER_CUBIC)
-    gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
-    # THRESH_BINARY_INV: 픽셀 > thresh → 0(검), ≤ thresh → 255(흰)
-    _, t = cv2.threshold(gray, THRESH_VAL, 255, cv2.THRESH_BINARY_INV)
-    return cv2.cvtColor(t, cv2.COLOR_GRAY2BGR)
+# ── 캡처 ─────────────────────────────────────────────────────────
+def capture_screen(region):
+    try:
+        import mss
+        with mss.mss() as sct:
+            mon = {"left": region["x"], "top": region["y"],
+                   "width": region["width"], "height": region["height"]}
+            shot = sct.grab(mon)
+            return cv2.cvtColor(np.array(shot), cv2.COLOR_BGRA2BGR)
+    except ImportError:
+        print("[ERROR] pip install mss")
+        sys.exit(1)
 
 
-def do_ocr(ocr_type, ocr, img_bgr):
-    """OCR 실행 → [(text, conf), ...]"""
-    results = []
-    if ocr_type == "easyocr":
-        raw = ocr.readtext(img_bgr, detail=1, paragraph=False)
-        for (_, text, conf) in raw:
-            results.append((text, conf))
-    else:  # tesseract
-        from PIL import Image as PILImage
-        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        pil  = PILImage.fromarray(gray)
-        # psm=11(sparse text) 우선 — adena_crop.png 기준 최적
-        # psm=6(block text) 병행 — 전체 이름표 박스일 때 보조
-        for psm in [11, 6]:
-            text = ocr.image_to_string(
-                pil, lang="kor+eng",
-                config=f"--psm {psm} --oem 1"
-            ).strip()
-            if text:
-                results.append((text, 0.8))
-    return results
+# ── OCR 워커 스레드 ───────────────────────────────────────────────
+class OcrWorker(threading.Thread):
+    """메인 루프와 별도로 OCR을 처리하는 스레드."""
 
+    def __init__(self, ocr_type, ocr):
+        super().__init__(daemon=True)
+        self.ocr_type   = ocr_type
+        self.ocr        = ocr
+        self.in_q       = queue.Queue(maxsize=2)   # 최신 프레임만 유지
+        self.result     = []                        # 최신 탐지 결과
+        self.result_lock= threading.Lock()
+        self._stop      = threading.Event()
 
-def scan_frame(frame, ocr_type, ocr, clicker_type, clicker, show_debug=True):
-    """한 프레임에서 아데나 탐지 → 탐지 시 즉시 클릭"""
-    rx = SCAN_REGION["x"]; ry = SCAN_REGION["y"]
-    rw = min(SCAN_REGION["width"],  frame.shape[1] - rx)
-    rh = min(SCAN_REGION["height"], frame.shape[0] - ry)
-    crop = frame[ry:ry + rh, rx:rx + rw]
+    def submit(self, crop, boxes):
+        """메인 루프에서 호출 — 큐가 꽉 차면 버림(최신만 처리)"""
+        try:
+            self.in_q.put_nowait((crop, boxes))
+        except queue.Full:
+            pass
 
-    boxes = extract_candidate_boxes(crop)
-    found = []
+    def get_result(self):
+        with self.result_lock:
+            return list(self.result)
 
-    debug_crop = crop.copy() if show_debug else None
-
-    for (bx, by, bw, bh) in boxes:
-        patch = crop[by:by + bh, bx:bx + bw]
-        if patch.size == 0:
-            continue
-
-        processed = preprocess(patch)
-        results   = do_ocr(ocr_type, ocr, processed)
-
-        matched = False
-        for (text, conf) in results:
-            if conf < MIN_CONFIDENCE:
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                crop, boxes = self.in_q.get(timeout=0.1)
+            except queue.Empty:
                 continue
-            for kw in KEYWORDS:
-                if kw.lower() in text.lower():
-                    sx = bx + bw // 2 + rx
-                    sy = by + bh // 2 + ry
-                    found.append((sx, sy, text.strip(), conf))
-                    print(f"  ✅ '{text}'  conf={conf:.2f}  위치=({sx},{sy})  박스=({bx},{by},{bw},{bh})")
 
-                    # ── 클릭 ──────────────────────────────────────
-                    if CLICK_ENABLED and clicker is not None:
-                        do_click(clicker_type, clicker, sx, sy)
-                        print(f"  🖱️  클릭: ({sx}, {sy})")
-                    # ──────────────────────────────────────────────
+            found = []
+            for (bx, by, bw, bh) in boxes:
+                patch = crop[by:by+bh, bx:bx+bw]
+                if patch.size == 0:
+                    continue
+                processed = preprocess(patch)
+                results   = do_ocr(self.ocr_type, self.ocr, processed)
+                for (text, conf) in results:
+                    if is_adena(text, conf):
+                        found.append((bx, by, bw, bh, text.strip(), conf))
 
-                    matched = True
-                    break
+            with self.result_lock:
+                self.result = found
 
-        if show_debug and debug_crop is not None:
-            color = (0, 255, 0) if matched else (0, 180, 255)
-            cv2.rectangle(debug_crop, (bx, by), (bx + bw, by + bh), color, 2)
-            cv2.putText(debug_crop, f"{bw}x{bh}", (bx, by - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-
-    if show_debug and debug_crop is not None:
-        scale = min(1.0, 1280 / max(debug_crop.shape[1], 1))
-        dw = int(debug_crop.shape[1] * scale)
-        dh = int(debug_crop.shape[0] * scale)
-        dbg = cv2.resize(debug_crop, (dw, dh))
-        cv2.imshow("AdenaDetector  [ESC=종료 / S=저장]", dbg)
-
-    return found
+    def stop(self):
+        self._stop.set()
 
 
 # ── 메인 ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    ocr_type, ocr           = get_ocr()
-    clicker_type, clicker   = get_clicker()
+    ocr_type, ocr         = get_ocr()
+    clicker_type, clicker = get_clicker()
 
     click_status = "ON ✅" if (CLICK_ENABLED and clicker) else "OFF ❌"
-    print(f"[설정] 클릭={click_status}  MIN_CONF={MIN_CONFIDENCE}  DELAY={CLICK_DELAY}s")
+    print(f"[설정] 클릭={click_status}  MIN_CONF={MIN_CONFIDENCE}"
+          f"  HOVER={HOVER_DELAY}s  CLICK2={CLICK2_DELAY}s")
 
-    # 이미지 파일 지정 시 단발 테스트 (클릭 없이 탐지만)
+    # ── 이미지 파일 단발 테스트 ──────────────────────────────────
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
-        frame = cv2.imread(img_path)
+        frame    = cv2.imread(img_path)
         if frame is None:
             print(f"[ERROR] 이미지 로드 실패: {img_path}")
             sys.exit(1)
-        print(f"[테스트] 이미지: {img_path}  크기: {frame.shape}")
-        # 이미지 파일 테스트 시엔 클릭 안 함 (실제 화면 아님)
-        found = scan_frame(frame, ocr_type, ocr,
-                           clicker_type=None, clicker=None, show_debug=True)
-        if not found:
-            print("  ❌ 아데나 미탐지")
-        else:
-            print(f"\n  [결과] {len(found)}개 탐지 완료")
+        print(f"[테스트] {img_path}  크기: {frame.shape}")
+
+        rx = SCAN_REGION["x"]; ry = SCAN_REGION["y"]
+        rw = min(SCAN_REGION["width"],  frame.shape[1]-rx)
+        rh = min(SCAN_REGION["height"], frame.shape[0]-ry)
+        crop  = frame[ry:ry+rh, rx:rx+rw]
+        boxes = extract_candidate_boxes(crop)
+        print(f"[박스] {len(boxes)}개")
+
+        debug = crop.copy()
+        for (bx, by, bw, bh) in boxes:
+            patch     = crop[by:by+bh, bx:bx+bw]
+            processed = preprocess(patch)
+            results   = do_ocr(ocr_type, ocr, processed)
+            matched   = False
+            for (text, conf) in results:
+                if is_adena(text, conf):
+                    sx = bx + bw//2 + rx
+                    sy = by + bh//2 + ry
+                    print(f"  ✅ '{text}'  conf={conf:.2f}  위치=({sx},{sy})")
+                    matched = True
+            color = (0,255,0) if matched else (0,180,255)
+            cv2.rectangle(debug, (bx,by), (bx+bw,by+bh), color, 2)
+
+        if not any(True for _ in boxes):
+            print("  ❌ 후보 박스 없음")
+
+        cv2.imshow("Test", debug)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
         sys.exit(0)
 
-    # 실시간 캡처 루프 (탐지 + 클릭)
-    print(f"\n[실시간] 화면 캡처 시작  스캔영역={SCAN_REGION}")
-    print(f"  파라미터: dilation={DILATION_K}x{DILATION_K}×{DILATION_IT}  scale={SCALE}  thresh={THRESH_VAL}")
-    print("  ESC: 종료 / S: 현재 프레임 저장 / C: 클릭 ON/OFF 토글")
+    # ── 실시간 루프 ───────────────────────────────────────────────
+    worker = OcrWorker(ocr_type, ocr)
+    worker.start()
+
+    print(f"\n[실시간] 스캔영역={SCAN_REGION}")
+    print(f"  dilation={DILATION_K}×{DILATION_K}×{DILATION_IT}  "
+          f"scale={SCALE}  thresh={THRESH_VAL}")
+    print("  ESC: 종료  /  C: 클릭 ON/OFF  /  S: 프레임 저장")
+
+    last_click_pos  = None   # 동일 위치 중복 클릭 방지
+    last_click_time = 0.0
+    RECLICK_INTERVAL = 1.5   # 같은 위치 재클릭 최소 간격 (초)
+
     frame_count = 0
     while True:
-        t0 = time.time()
-        frame  = capture_screen(SCAN_REGION)
-        found  = scan_frame(frame, ocr_type, ocr,
-                            clicker_type, clicker, show_debug=True)
-        elapsed = time.time() - t0
+        t0    = time.time()
+        frame = capture_screen(SCAN_REGION)
 
-        if found:
-            print(f"[프레임 {frame_count}]  탐지: {len(found)}개  ({elapsed*1000:.0f}ms)")
+        rx = SCAN_REGION["x"]; ry = SCAN_REGION["y"]
+        rw = min(SCAN_REGION["width"],  frame.shape[1]-rx)
+        rh = min(SCAN_REGION["height"], frame.shape[0]-ry)
+        crop  = frame[ry:ry+rh, rx:rx+rw]
+
+        # 박스 탐지 (빠름)
+        boxes = extract_candidate_boxes(crop)
+
+        # OCR 워커에 최신 프레임 제출
+        if boxes:
+            worker.submit(crop, boxes)
+
+        # OCR 결과 수신 (이전 프레임 결과)
+        ocr_hits = worker.get_result()
+
+        # 디버그 오버레이
+        debug = crop.copy()
+        now   = time.time()
+        for (bx, by, bw, bh) in boxes:
+            cv2.rectangle(debug, (bx,by), (bx+bw,by+bh), (0,180,255), 1)
+
+        for (bx, by, bw, bh, text, conf) in ocr_hits:
+            sx = bx + bw//2 + rx
+            sy = by + bh//2 + ry
+
+            # 초록 박스 표시
+            cv2.rectangle(debug, (bx,by), (bx+bw,by+bh), (0,255,0), 2)
+            cv2.putText(debug, text[:10], (bx, by-4),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+
+            print(f"  ✅ '{text}'  conf={conf:.2f}  위치=({sx},{sy})")
+
+            # 클릭 (중복 방지: 동일 위치 RECLICK_INTERVAL 이내 재클릭 안 함)
+            if CLICK_ENABLED and clicker is not None:
+                same_pos = (last_click_pos == (sx, sy))
+                cooldown_ok = (now - last_click_time) >= RECLICK_INTERVAL
+                if not same_pos or cooldown_ok:
+                    do_click(clicker_type, clicker, sx, sy)
+                    last_click_pos  = (sx, sy)
+                    last_click_time = time.time()
+
+        elapsed = (time.time() - t0) * 1000
+        if ocr_hits:
+            print(f"[프레임 {frame_count}]  탐지: {len(ocr_hits)}개  ({elapsed:.0f}ms)")
         else:
-            sys.stdout.write(f"\r[프레임 {frame_count}]  탐지 없음  ({elapsed*1000:.0f}ms)   ")
+            sys.stdout.write(f"\r[프레임 {frame_count}]  박스={len(boxes)}개  ({elapsed:.0f}ms)   ")
             sys.stdout.flush()
+
+        # 디버그 창 (박스 탐지만 반영 — 즉각 표시)
+        scale_v = min(1.0, 1280 / max(debug.shape[1], 1))
+        dw = int(debug.shape[1] * scale_v)
+        dh = int(debug.shape[0] * scale_v)
+        cv2.imshow("AdenaDetector  [ESC=종료 / C=클릭토글 / S=저장]",
+                   cv2.resize(debug, (dw, dh)))
 
         frame_count += 1
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:               # ESC — 종료
+        if key == 27:
             break
-        elif key == ord('s'):       # S — 프레임 저장
+        elif key == ord('s'):
             fname = f"capture_{frame_count}.png"
             cv2.imwrite(fname, frame)
             print(f"\n[저장] {fname}")
-        elif key == ord('c'):       # C — 클릭 토글
+        elif key == ord('c'):
             CLICK_ENABLED = not CLICK_ENABLED
             print(f"\n[토글] 클릭 {'ON ✅' if CLICK_ENABLED else 'OFF ❌'}")
 
+    worker.stop()
     cv2.destroyAllWindows()
     print("\n종료")
