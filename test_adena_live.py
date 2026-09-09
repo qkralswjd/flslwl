@@ -18,9 +18,35 @@ import numpy as np
 import time
 import threading
 import queue
+import json
+import os
+
+# ── config.json에서 detection_zone 읽기 ───────────────────────────
+def _load_scan_region():
+    """config/config.json의 detection_zone을 SCAN_REGION으로 변환.
+    없으면 전체 화면 fallback."""
+    cfg_path = os.path.join(os.path.dirname(__file__), "config", "config.json")
+    try:
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        dz = cfg.get("detection_zone", {})
+        if not dz.get("enabled", True):
+            raise ValueError("detection_zone disabled")
+        cx = dz.get("center_x", 960)
+        cy = dz.get("center_y", 540)
+        hw = dz.get("half_width",  600)
+        hh = dz.get("half_height", 400)
+        region = {"x": cx - hw, "y": cy - hh,
+                  "width": hw * 2, "height": hh * 2}
+        print(f"[설정] detection_zone 로드: x={region['x']}~{region['x']+region['width']}"
+              f"  y={region['y']}~{region['y']+region['height']}")
+        return region
+    except Exception as e:
+        print(f"[설정] detection_zone 로드 실패({e}) → 전체화면 사용")
+        return {"x": 0, "y": 0, "width": 1920, "height": 850}
 
 # ── 설정 ──────────────────────────────────────────────────────────
-SCAN_REGION  = {"x": 0, "y": 0, "width": 1920, "height": 850}
+SCAN_REGION  = _load_scan_region()   # config.json detection_zone과 동일
 
 # 박스 탐지 파라미터 (흰 테두리 기반)
 WHITE_LOWER  = (0,   0,   200)
