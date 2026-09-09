@@ -79,9 +79,9 @@
     "detection_zone": {
         "enabled": true,
         "center_x": 960,
-        "center_y": 540,
+        "center_y": 490,
         "half_width": 600,
-        "half_height": 200
+        "half_height": 250
     },
     "realtime_template": {
         "_comment": "field 모드 전용 — RealtimeTemplateDetector 파라미터",
