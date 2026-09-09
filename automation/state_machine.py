@@ -178,6 +178,8 @@ class HuntingStateMachine:
         self.dummy_drag_steps    = dummy_cfg.get("drag_steps", 8)
         self.dummy_atk_interval  = dummy_cfg.get("attack_interval_ms", 500) / 1000.0
         self.dummy_move_timeout  = dummy_cfg.get("move_timeout_ms", 3000) / 1000.0
+        # attack_duration_s: 0이면 레벨 달성까지 무한, 양수면 해당 초 후 다음 단계
+        self.dummy_attack_duration = dummy_cfg.get("attack_duration_s", 0.0)
         self._dummy_move_done    = False
         self._dummy_move_start   = 0.0
         self._last_dummy_atk     = 0.0
@@ -467,6 +469,17 @@ class HuntingStateMachine:
             )
             self._enter(HuntingState.USE_SPEED_POTION)
             return
+
+        # 시간 기반 종료: attack_duration_s > 0 이면 해당 시간 후 다음 단계
+        if self.dummy_attack_duration > 0:
+            elapsed = now - self._entered_at
+            if elapsed >= self.dummy_attack_duration:
+                logger.info(
+                    f"[HuntingSM] ⏱ 허수아비 {self.dummy_attack_duration:.0f}초 공격 완료 "
+                    f"→ 속도향상물약 사용"
+                )
+                self._enter(HuntingState.USE_SPEED_POTION)
+                return
 
         # 드래그 공격 1회만 실행 (게임이 자동 반복하므로 1번이면 충분)
         if not self._dummy_drag_done:

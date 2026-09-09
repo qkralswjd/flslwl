@@ -66,6 +66,8 @@
             "y": 201
         },
         "drag_steps": 8,
+        "attack_duration_s": 10,
+        "_comment_duration": "허수아비 공격 지속 시간(초). 0이면 레벨 달성까지 무한",
         "attack_interval_ms": 800,
         "_comment_attack_interval": "공격 간격(ms). 리니지 클래식 허수아비 타격 쿨타임에 맞게 조정 (기본 800ms)",
         "move_timeout_ms": 3000
@@ -124,6 +126,8 @@
         "_comment": "순찰 웨이포인트 도착 시 전투 서브플로우 설정",
         "kill_wait_ms": 2500,
         "_comment_kill_wait": "공격 후 몬스터 사망 대기 시간 (ms). 이 시간 후 아데나 스캔",
+        "attack_duration_s": 10,
+        "_comment_duration": "허수아비 공격 지속 시간(초). 0이면 레벨 달성까지 무한",
         "attack_interval_ms": 800,
         "_comment_attack": "같은 지점에서 연속 공격 사이 최소 간격 (ms)",
         "max_attacks_per_wp": 3,
