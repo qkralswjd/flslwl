@@ -231,13 +231,13 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             excluded_color_ratio=clf_config.get("excluded_color_ratio", 0.2),
             min_size_ratio=clf_config.get("min_size_ratio", 0.6),
         )
-        if (clf_config.get("enabled") and not is_leveling and not is_field)
+        if (clf_config.get("enabled") and not is_leveling)
         else None
     )
     if is_leveling:
         logger.info("[Mode] 레벨링 모드: 템플릿 매칭 비활성화")
     if is_field:
-        logger.info("[Mode] 필드 모드: 템플릿 매칭 비활성화 (MOG2+SceneFilter만 사용)")
+        logger.info("[Mode] 필드 모드: 템플릿 매칭 ON (던전과 동일)")
 
     debug_view = (
         DebugView(motion_detector, contour_detector, WINDOW_NAME, classifier=classifier)
