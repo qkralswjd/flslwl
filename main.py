@@ -1,29 +1,15 @@
 """Entry point: capture -> detect -> track -> overlay -> (optional) Pico click/drag.
 
-Run directly for a plain OpenCV-window version:
-    python main.py
+탐지 엔진: RealtimeTemplateDetector (단일 엔진 — 모든 모드 공통)
+    - MOG2 배경차분 완전 제거
+    - 이동 중/정지 중 구분 없이 매 프레임 탐지
+    - warmup·SceneMotionFilter 불필요
+    - config/templates/ PNG 파일 사용
 
-`run()` is factored out so ui/settings_window.py can launch/stop the same
-loop from a background thread and read live status back into the UI.
-
-Pico 통합:
-    config["pico"]["enabled"] == true 일 때
-    PicoSerialWorker를 백그라운드 스레드로 시작하고,
-    NearestNeighborTracker에 click/drag 콜백을 주입합니다.
-
-SceneMotionFilter 통합:
-    플레이어가 이동해 화면 전체가 움직일 때 감지를 자동으로 일시정지합니다.
-    config["scene_motion"]["enabled"] == true 일 때 활성화됩니다.
-    ※ field 모드는 RealtimeTemplateDetector를 사용하므로 SceneMotionFilter 불필요.
-
-HuntingStateMachine 통합 (1단계 자동 레벨링):
-    config_automation.json 기반으로 동작.
-    automation_config가 전달되면 자동 레벨링 상태머신이 활성화됩니다.
-
-field 모드 탐지 파이프라인:
-    MOG2 배경차분 대신 실시간 템플릿 매칭(RealtimeTemplateDetector)을 사용.
-    이동 중/정지 중 구분 없이 매 프레임 탐지 → SceneMotionFilter·warmup 불필요.
-    config/templates/ 의 PNG 파일을 직접 활용.
+실행 모드:
+    python main.py              → dungeon (탐지+클릭만)
+    python main.py leveling     → 허수아비→사냥터→사냥→아데나 전체 자동화
+    python main.py field        → 사냥터 도착 후 순찰+사냥 자동화
 """
 
 import json
@@ -38,9 +24,6 @@ from capture.screen_capture import ScreenCapturer
 from config.config_loader import load_config
 from paths import get_templates_dir, get_reject_templates_dir
 from debug.debug_view import DebugView
-from detection.classifier import MonsterClassifier
-from detection.contour_detector import ContourDetector
-from detection.motion_detector import MotionDetector, SceneMotionFilter
 from detection.realtime_template_detector import RealtimeTemplateDetector
 from overlay.overlay import draw_enemies, draw_hud, draw_roi, draw_detection_zone
 from tracking.tracker import NearestNeighborTracker
@@ -113,6 +96,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                    "dungeon":  "🏰 던전 사냥 모드",
                    "field":    "🗺 필드 이동 사냥 모드"}.get(mode, mode)
     logger.info(f"=== 실행 모드: {mode_label} ===")
+    logger.info("[탐지엔진] RealtimeTemplateDetector (단일 엔진)")
 
     # ── HuntingStateMachine 초기화 (레벨링/필드 모드) ─────────────────
     hunting_sm = None
@@ -152,22 +136,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     click_callback = pico_click if pico_worker else None
     drag_callback  = pico_drag  if (pico_worker and drag_enabled) else None
 
-    # ── SceneMotionFilter 초기화 ───────────────────────────────────────
-    # field 모드는 RealtimeTemplateDetector 사용 → SceneMotionFilter 불필요
-    sm_cfg = config.get("scene_motion", {})
-    scene_filter = (
-        SceneMotionFilter(
-            scene_threshold     = sm_cfg.get("scene_threshold",     12.0),
-            settle_frames       = sm_cfg.get("settle_frames",         5),
-            downscale           = sm_cfg.get("downscale",             4),
-            crop_ratio          = sm_cfg.get("crop_ratio",          0.6),
-            move_confirm_frames = sm_cfg.get("move_confirm_frames",   2),
-        )
-        if (sm_cfg.get("enabled", True) and not is_field)
-        else None
-    )
-    if is_field:
-        logger.info("[Field] SceneMotionFilter 비활성화 — RealtimeTemplateDetector 사용")
+    # SceneMotionFilter 완전 제거 — RealtimeTemplateDetector는 이동 중에도 탐지 가능
+    scene_filter = None
 
     # capture_region → 모니터 내 offset
     cap_region = config.get("capture_region")
@@ -178,16 +148,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
     # ── 각 모듈 초기화 ─────────────────────────────────────────────────
     capturer = ScreenCapturer(config["monitor_index"], config.get("capture_region"))
-
-    # capturer 생성 후 HuntingStateMachine 초기화 + 자동 시작
-    # (field 모드는 tracker 생성 후 주입이 필요하므로 tracker 생성 뒤로 이동)
     _hunting_sm_init_pending = _hunting_sm_pending  # tracker 생성 후 처리
-    motion_detector = MotionDetector(
-        blur_kernel=config["blur_kernel"],
-        morph_kernel=config["morph_kernel"],
-        **config["motion"],
-    )
-    contour_detector = ContourDetector(config["min_area"], config["max_area"])
 
     tracker = NearestNeighborTracker(
         max_missing_frames      = config["max_missing_frames"],
@@ -234,46 +195,23 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     elif _hunting_sm_init_pending and not pico_worker:
         logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
 
+    # ── RealtimeTemplateDetector 초기화 (단일 탐지 엔진 — 모든 모드 공통) ──
     clf_config = config.get("classifier", {})
-    # 레벨링/필드 모드에서는 MOG2 후처리용 MonsterClassifier OFF
-    # (field 모드는 RealtimeTemplateDetector가 자체 매칭 수행)
-    classifier = (
-        MonsterClassifier(
-            clf_config.get("templates_dir") or get_templates_dir(),
-            clf_config.get("reject_templates_dir") or get_reject_templates_dir(),
-            confidence_threshold=clf_config.get("confidence_threshold", 0.5),
-            excluded_color_ranges=clf_config.get("excluded_color_ranges"),
-            excluded_color_ratio=clf_config.get("excluded_color_ratio", 0.2),
-            min_size_ratio=clf_config.get("min_size_ratio", 0.6),
-        )
-        if (clf_config.get("enabled") and not is_leveling and not is_field)
-        else None
+    rtm_cfg    = config.get("realtime_template", {})
+    rt_detector = RealtimeTemplateDetector(
+        templates_dir     = clf_config.get("templates_dir") or get_templates_dir(),
+        match_threshold   = rtm_cfg.get("match_threshold",    0.55),
+        scale_factors     = rtm_cfg.get("scale_factors",      [1.0]),
+        nms_iou_threshold = rtm_cfg.get("nms_iou_threshold",  0.30),
+        max_templates     = rtm_cfg.get("max_templates",       None),
     )
-    if is_leveling:
-        logger.info("[Mode] 레벨링 모드: MOG2 템플릿 매칭 비활성화")
-
-    # ── field 모드 전용: RealtimeTemplateDetector 초기화 ─────────────
-    rtm_cfg = config.get("realtime_template", {})
-    rt_detector = None
-    if is_field:
-        rt_detector = RealtimeTemplateDetector(
-            templates_dir    = clf_config.get("templates_dir") or get_templates_dir(),
-            match_threshold  = rtm_cfg.get("match_threshold",   0.55),
-            scale_factors    = rtm_cfg.get("scale_factors",     [0.8, 1.0, 1.2]),
-            nms_iou_threshold= rtm_cfg.get("nms_iou_threshold", 0.30),
-            max_templates    = rtm_cfg.get("max_templates",      None),
-        )
-        logger.info(
-            f"[Field] RealtimeTemplateDetector 준비 완료 "
-            f"(threshold={rtm_cfg.get('match_threshold', 0.55)} "
-            f"scales={rtm_cfg.get('scale_factors', [0.8, 1.0, 1.2])})"
-        )
-
-    debug_view = (
-        DebugView(motion_detector, contour_detector, WINDOW_NAME, classifier=classifier)
-        if config.get("show_debug")
-        else None
+    logger.info(
+        f"[탐지엔진] RealtimeTemplateDetector 준비 완료 "
+        f"(threshold={rtm_cfg.get('match_threshold', 0.55)} "
+        f"scales={rtm_cfg.get('scale_factors', [1.0])})"
     )
+
+    debug_view = None  # MOG2 DebugView 제거
 
     capture_interval   = 1.0 / max(config["capture_fps"], 1)
     detection_interval = 1.0 / max(config["detection_fps"], 1)
@@ -284,12 +222,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     capture_fps_smooth   = 0.0
     detection_fps_smooth = 0.0
     enemies              = []
-    last_mask            = None
-    last_roi_frame       = None
-    is_moving            = False   # SceneMotionFilter 결과 (dungeon/leveling 모드)
-    _field_patrol_moving = False   # 필드모드: patrol_mover가 이동 명령 중인지
-    _field_mog2_reset_needed = False  # (레거시 — field 모드에서는 미사용)
-    _field_warmup_frames = 0       # (레거시 — field 모드에서는 미사용)
+    _patrol_moving       = False   # patrol_mover 이동 중 여부 (표시용)
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     # 창을 지정 모니터로 이동 (window_monitor_x/y 설정 기준)
@@ -301,11 +234,10 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
         debug_view.create_trackbars()
 
     pico_label = f"port={pico_cfg.get('serial_port','?')}" if pico_cfg.get("enabled") else "disabled"
-    scene_label = "ON" if scene_filter else "OFF"
     logger.info(
-        "=== Game Enemy Tracker + Pico 시작 (Pico: %s | SceneFilter: %s)"
-        " | 종료: 'q' | 몬스터 캡처: 't' | 거부 캡처: 'r' ===",
-        pico_label, scene_label,
+        "=== Game Enemy Tracker + Pico 시작 (Pico: %s)"
+        " | 종료: 'q' ===",
+        pico_label,
     )
 
     try:
@@ -325,120 +257,66 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
             roi_frame, roi_offset_val = _slice_roi(frame, config.get("roi"))
 
-            # ── 필드모드: patrol_mover 이동 상태 추적 ───────────────
-            # RealtimeTemplateDetector는 이동 중에도 탐지 가능하므로
-            # 이동 여부와 관계없이 탐지를 계속 실행.
-            # (표시용으로만 _field_patrol_moving 추적)
-            if is_field and hunting_sm is not None:
+            # ── patrol_mover 이동 상태 추적 (표시용) ────────────────
+            if hunting_sm is not None:
                 from automation.state_machine import HuntingState
-                _pm = hunting_sm.patrol_mover
-                _field_patrol_moving = (
-                    hunting_sm.state == HuntingState.HUNTING_10
-                    and _pm._state == "MOVING"
-                )
-
-            # ── SceneMotionFilter: dungeon/leveling 모드 전용 ─────────
-            # field 모드는 scene_filter=None이므로 항상 is_moving=False
-            if scene_filter is not None:
-                is_moving = scene_filter.update(roi_frame)
-                if is_moving:
-                    tracker._sm.reset()
-            else:
-                is_moving = False
+                try:
+                    _pm = hunting_sm.patrol_mover
+                    _patrol_moving = (
+                        hunting_sm.state == HuntingState.HUNTING_10
+                        and _pm._state == "MOVING"
+                    )
+                except AttributeError:
+                    _patrol_moving = False
 
             now = time.time()
 
-            # ── HUNTING_10일 때만 탐지 실행 (field/leveling 모드) ─────
+            # ── HUNTING_10일 때만 탐지 실행 (SM 있을 때) ─────────────
             _is_hunt_state = False
             if hunting_sm is not None:
                 from automation.state_machine import HuntingState
                 _is_hunt_state = (hunting_sm.state == HuntingState.HUNTING_10)
-            # dungeon 모드는 항상 탐지
             _detection_allowed = (hunting_sm is None) or _is_hunt_state
 
             if now - last_detection_time >= detection_interval:
                 if _detection_allowed:
-                    if debug_view:
-                        debug_view.read_trackbars()
-
                     proc_start = time.time()
 
-                    if is_field and rt_detector is not None:
-                        # ════════════════════════════════════════════════════
-                        # [FIELD 모드] RealtimeTemplateDetector
-                        # — MOG2 완전 우회, 이동 중/정지 중 항상 탐지
-                        # ════════════════════════════════════════════════════
-                        detections = rt_detector.detect(roi_frame)
+                    # ════════════════════════════════════════════════════
+                    # 단일 탐지 엔진 — RealtimeTemplateDetector
+                    # 모든 모드(dungeon/leveling/field) 동일하게 적용
+                    # ════════════════════════════════════════════════════
+                    detections = rt_detector.detect(roi_frame)
 
-                        # detection_zone 필터 (field 모드도 동일 적용)
-                        dz = config.get("detection_zone")
-                        if dz and dz.get("enabled", False):
-                            rw = roi_dict.get("width",  1440) if roi_dict else 1440
-                            rh = roi_dict.get("height",  780) if roi_dict else  780
-                            cx = dz.get("center_x", rw // 2)
-                            cy = dz.get("center_y", rh // 2)
-                            hw = dz.get("half_width",  400)
-                            hh = dz.get("half_height", 300)
-                            x0, y0 = cx - hw, cy - hh
-                            x1, y1 = cx + hw, cy + hh
-                            detections = [
-                                d for d in detections
-                                if x0 <= d.center_x <= x1 and y0 <= d.center_y <= y1
-                            ]
-
-                        last_mask      = None   # MOG2 마스크 없음
-                        last_roi_frame = roi_frame
-
-                    else:
-                        # ════════════════════════════════════════════════════
-                        # [DUNGEON / LEVELING 모드] MOG2 파이프라인
-                        # ════════════════════════════════════════════════════
-                        if not is_moving:
-                            # 정지 중: 정상 학습
-                            mask       = motion_detector.get_mask(roi_frame, learning_rate=-1.0)
-                            detections = contour_detector.detect(mask)
-
-                            # detection_zone 필터
-                            dz = config.get("detection_zone")
-                            if dz and dz.get("enabled", False):
-                                rw = roi_dict.get("width",  1440) if roi_dict else 1440
-                                rh = roi_dict.get("height",  780) if roi_dict else  780
-                                cx = dz.get("center_x", rw // 2)
-                                cy = dz.get("center_y", rh // 2)
-                                hw = dz.get("half_width",  400)
-                                hh = dz.get("half_height", 300)
-                                x0, y0 = cx - hw, cy - hh
-                                x1, y1 = cx + hw, cy + hh
-                                detections = [
-                                    d for d in detections
-                                    if x0 <= d.center_x <= x1 and y0 <= d.center_y <= y1
-                                ]
-
-                            if classifier is not None:
-                                detections = classifier.confirm(detections, roi_frame)
-
-                            last_mask      = mask
-                            last_roi_frame = roi_frame
-                        else:
-                            # 이동 중: MOG2 동결 + 적 목록 비우기
-                            motion_detector.get_mask(roi_frame, learning_rate=0.0)
-                            detections = []
+                    # detection_zone 필터
+                    dz = config.get("detection_zone")
+                    if dz and dz.get("enabled", False):
+                        rw = roi_dict.get("width",  1440) if roi_dict else 1440
+                        rh = roi_dict.get("height",  780) if roi_dict else  780
+                        cx = dz.get("center_x", rw // 2)
+                        cy = dz.get("center_y", rh // 2)
+                        hw = dz.get("half_width",  400)
+                        hh = dz.get("half_height", 300)
+                        x0, y0 = cx - hw, cy - hh
+                        x1, y1 = cx + hw, cy + hh
+                        detections = [
+                            d for d in detections
+                            if x0 <= d.center_x <= x1 and y0 <= d.center_y <= y1
+                        ]
 
                     dt = now - last_tracker_update
                     last_tracker_update = now
 
-                    # ── TargetSM 활성 여부 ────────────────────────────────
-                    # field 모드: state_machine이 tracker._sm.set_active()를 직접 제어
-                    # leveling 모드: HUNTING_10일 때만 active
-                    # dungeon 모드 (hunting_sm=None): 항상 active(기본값 True)
+                    # TargetSM 활성 여부 (leveling: HUNTING_10일 때만)
                     if hunting_sm is not None and not is_field:
                         from automation.state_machine import HuntingState
-                        _is_hunting = (hunting_sm.state == HuntingState.HUNTING_10)
-                        tracker._sm.set_active(_is_hunting)
+                        tracker._sm.set_active(
+                            hunting_sm.state == HuntingState.HUNTING_10
+                        )
 
                     enemies = tracker.update(detections, dt if dt > 0 else 1e-3)
 
-                    # ── HuntingStateMachine 업데이트 ──────────────────
+                    # HuntingStateMachine 업데이트
                     if hunting_sm is not None:
                         hunting_sm.update(roi_frame, enemies)
 
@@ -447,7 +325,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                         detection_fps_smooth = 0.9 * detection_fps_smooth + 0.1 * (1000.0 / proc_elapsed_ms)
 
                 else:
-                    # 사냥터 아님: 탐지 건너뜀, SM 업데이트만
+                    # 사냥터 이동 중: 탐지 건너뜀, SM 업데이트만
                     enemies = []
                     if hunting_sm is not None:
                         hunting_sm.update(roi_frame, enemies)
@@ -459,18 +337,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             draw_roi(display_frame, config.get("roi"))
             draw_detection_zone(display_frame, config.get("detection_zone"), roi_offset_val)
 
-            # 이동 중이면 오버레이에 표시
-            # field 모드: 이동 중에도 탐지 계속 → "PATROL MOVING" 표시
-            if is_field and _field_patrol_moving:
+            # 순찰 이동 중 표시
+            if _patrol_moving:
                 cv2.putText(
-                    display_frame, "PATROL MOVING - TEMPLATE MATCHING ACTIVE",
+                    display_frame, "PATROL MOVING",
                     (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                    (0, 200, 100), 2, cv2.LINE_AA,
-                )
-            elif is_moving:
-                cv2.putText(
-                    display_frame, "MOVING - DETECTION PAUSED",
-                    (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
                     (0, 165, 255), 2, cv2.LINE_AA,
                 )
 
@@ -478,17 +349,20 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             if hunting_sm is not None:
                 sm_status = hunting_sm.get_status()
 
-                # 필드모드: 순찰 서브상태 표시 (PATROL / SCAN / COMBAT / LOOT_SCAN)
+                # 서브상태 표시
                 _field_sub = ""
-                if is_field and sm_status["state"] == "HUNTING_10":
-                    if _field_patrol_moving:
-                        _wp_label  = hunting_sm.patrol_mover.current_label
-                        _field_sub = f" [PATROL→{_wp_label}]"
+                if sm_status["state"] == "HUNTING_10":
+                    if _patrol_moving:
+                        try:
+                            _wp_label  = hunting_sm.patrol_mover.current_label
+                            _field_sub = f" [PATROL→{_wp_label}]"
+                        except AttributeError:
+                            _field_sub = " [PATROL]"
                     else:
-                        _pc = hunting_sm._pc_state
+                        _pc = getattr(hunting_sm, "_pc_state", None)
                         if _pc == "SCAN":
                             _idle_t = sm_status.get("scan_idle_elapsed", 0.0)
-                            _field_sub = f" [SCAN {_idle_t:.1f}s/{hunting_sm._hunt_idle_timeout:.0f}s]"
+                            _field_sub = f" [SCAN {_idle_t:.1f}s]"
                         elif _pc == "KILL_WAIT":
                             _field_sub = " [COMBAT]"
                         elif _pc == "LOOT_SCAN":
@@ -514,9 +388,9 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     "LOOTING":            (0,   255, 200),
                     "DONE_PHASE1":        (255, 255,   0),
                 }
-                # 필드모드 순찰 이동 중: 주황색으로 구분
-                if is_field and _field_patrol_moving:
-                    sm_color = (0, 165, 255)   # 주황 — 이동 중
+                # 순찰 이동 중: 주황색
+                if _patrol_moving:
+                    sm_color = (0, 165, 255)
                 else:
                     sm_color = color_map.get(sm_status["state"], (200, 200, 200))
                 cv2.putText(
@@ -544,9 +418,6 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                 target_state_name = tracker.target_state.name,
                 current_target_id = tracker.current_target_id,
             )
-            if debug_view and last_mask is not None:
-                debug_view.draw_into(display_frame, last_roi_frame, last_mask)
-
             cv2.imshow(WINDOW_NAME, display_frame)
 
             if status_callback:
@@ -577,14 +448,6 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
-            if key == ord("t") and classifier is not None:
-                x, y, w, h = cv2.selectROI(WINDOW_NAME, frame, showCrosshair=True)
-                if w > 0 and h > 0:
-                    classifier.save_template(frame[y:y + h, x:x + w])
-            if key == ord("r") and classifier is not None:
-                x, y, w, h = cv2.selectROI(WINDOW_NAME, frame, showCrosshair=True)
-                if w > 0 and h > 0:
-                    classifier.save_reject_template(frame[y:y + h, x:x + w])
             if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                 break
     finally:
