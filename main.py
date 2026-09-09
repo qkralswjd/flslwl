@@ -300,9 +300,18 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     tracker._sm.reset()
 
             now = time.time()
+
+            # ── HUNTING_10일 때만 탐지 실행 (field/leveling 모드) ─────
+            _is_hunt_state = False
+            if hunting_sm is not None:
+                from automation.state_machine import HuntingState
+                _is_hunt_state = (hunting_sm.state == HuntingState.HUNTING_10)
+            # dungeon 모드는 항상 탐지
+            _detection_allowed = (hunting_sm is None) or _is_hunt_state
+
             if now - last_detection_time >= detection_interval:
-                if not is_moving:
-                    # ── 정지 중일 때만 감지 실행 ──────────────────────
+                if not is_moving and _detection_allowed:
+                    # ── 정지 중 + 사냥터일 때만 감지 실행 ────────────
                     if debug_view:
                         debug_view.read_trackbars()
 
@@ -356,10 +365,12 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     last_mask      = mask
                     last_roi_frame = roi_frame
                 else:
-                    # ── 이동 중: MOG2 학습 차단 + 적 목록 비우기 ───────
+                    # ── 이동 중 or 사냥터 아님: MOG2 동결 + 적 목록 비우기
                     # learningRate=0 → 배경 모델 동결 (오염 방지)
                     motion_detector.get_mask(roi_frame, learning_rate=0.0)
                     enemies = []
+                    if hunting_sm is not None:
+                        hunting_sm.update(roi_frame, enemies)
 
                 last_detection_time = now
 
