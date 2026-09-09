@@ -585,13 +585,18 @@ class HuntingStateMachine:
                 self._pc_state        = "SCAN"
                 self._pc_attack_count = 0
                 self._pc_scan_start_t = now   # SCAN 진입 시각 기록
+                # SCAN 진입 시 loot 캐시 무효화 → 이전 캐시 오탐 방지
+                self.loot_detector.invalidate()
             return
 
         # ── [SCAN] 도착 지점 탐지 ────────────────────────────────────
         if self._pc_state == "SCAN":
             # ── field 모드: tracker._sm에 공격 위임 ──────────────────
             if self._tracker is None:
-                logger.debug("[HuntingSM][SCAN] tracker=None → 기존모드 경로")
+                logger.warning(
+                    "[HuntingSM][SCAN] ⚠ tracker=None → 기존모드(max_attacks) 경로 탑승. "
+                    "field 모드로 실행했다면 'python main.py field' 로 재실행하세요."
+                )
             if self._tracker is not None:
                 from tracking.tracker import TargetState
                 sm = self._tracker._sm

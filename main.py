@@ -205,6 +205,10 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
         from automation.state_machine import HuntingStateMachine
         # field 모드: tracker를 SM에 주입 → IDLE일 때만 WP 이동, SM이 공격 위임
         _sm_tracker = tracker if is_field else None
+        logger.info(
+            f"[Automation] SM 초기화 — mode={mode!r} "
+            f"is_field={is_field} tracker={'주입' if _sm_tracker else 'None(기존모드)'}"
+        )
         hunting_sm = HuntingStateMachine(
             config        = _hunting_sm_config,
             pico_worker   = pico_worker,

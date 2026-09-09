@@ -41,20 +41,36 @@ def _get_ocr():
 
 def _preprocess_for_loot(crop: np.ndarray) -> np.ndarray:
     """아데나 텍스트 인식을 위한 전처리.
-    
-    리니지 클래식의 아이템 이름표는 보통 흰색/노란색 텍스트.
+
+    리니지 클래식 아데나 이름표: 갈색 배경 + 검정 텍스트 + 흰색 테두리.
+    원본 + 밝은버전 + 어두운버전 3종을 가로로 붙여 OCR 정확도를 높입니다.
     """
-    # 밝은 픽셀만 강조 (아이템 이름은 밝은 색)
+    # 크기 업스케일 (작은 텍스트 인식률 향상)
+    h, w = crop.shape[:2]
+    scale = max(1, min(4, int(60 / max(h, 1))))   # 최소 글자높이 60px 목표
+    if scale > 1:
+        crop = cv2.resize(crop, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 
-    # 밝은 텍스트 추출
+    # ① 밝은 텍스트 (흰색 테두리)
     _, bright = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
 
-    # 약간 팽창시켜 글자 연결
-    kernel = np.ones((2, 2), np.uint8)
-    dilated = cv2.dilate(bright, kernel, iterations=1)
+    # ② 어두운 텍스트 (검정 글씨) — 반전
+    _, dark = cv2.threshold(gray, 80, 255, cv2.THRESH_BINARY_INV)
 
-    return dilated
+    # ③ OTSU 자동 임계값
+    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    # 팽창으로 글자 연결
+    kernel = np.ones((2, 2), np.uint8)
+    bright = cv2.dilate(bright, kernel, iterations=1)
+    dark   = cv2.dilate(dark,   kernel, iterations=1)
+    otsu   = cv2.dilate(otsu,   kernel, iterations=1)
+
+    # 가로로 붙여서 반환 (OCR이 가장 읽기 좋은 버전을 골라씀)
+    combined = np.hstack([bright, dark, otsu])
+    return combined
 
 
 class LootDetector:
@@ -180,3 +196,13 @@ class LootDetector:
 
         import math
         return min(loots, key=lambda l: math.hypot(l[0] - ref_x, l[1] - ref_y))
+
+
+    def invalidate(self) -> None:
+        """캐시를 무효화합니다. 다음 find() 호출 시 즉시 재스캔합니다.
+        
+        SCAN 상태 진입 시 호출하면 이전 캐시로 인한 오탐/미탐을 방지합니다.
+        """
+        self._last_scan_time = 0.0
+        self._cached_loots   = []
+        logger.debug("[LootDetector] 캐시 무효화")
