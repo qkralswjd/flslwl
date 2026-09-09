@@ -23,6 +23,8 @@ KEYWORDS       = ["아데나", "데나", "Adena", "adena", "ADENA"]
 MIN_CONFIDENCE = 0.03   # easyocr 신뢰도 하한 (낮게 설정 — OCR 오인식 허용)
 CLICK_DELAY    = 0.3    # 클릭 후 대기 시간 (초)
 CLICK_ENABLED  = True   # False 로 바꾸면 클릭 없이 탐지만
+HOVER_DELAY    = 0.25   # 1차 클릭 후 노란색 변환 대기 (초)
+CLICK2_DELAY   = 0.1    # 2차 클릭 후 대기 (초)
 
 # 박스 추출 파라미터 (adena_crop.png 실측)
 WHITE_LOWER = (0,   0,   200)   # 흰 테두리 HSV 하한 (S<50, V>200)
@@ -62,14 +64,30 @@ def get_clicker():
 
 
 def do_click(clicker_type, clicker, x: int, y: int):
-    """(x, y) 좌표 좌클릭"""
+    """
+    아데나 줍기 2단계 클릭:
+      1차 클릭 → 마우스 호버 → 글씨 노란색으로 변환
+      HOVER_DELAY 대기 (노란색 변환 기다림)
+      2차 클릭 → 실제 줍기
+    """
     if clicker is None or not CLICK_ENABLED:
         return
+
+    # 1차 클릭 (호버 유발)
     if clicker_type == "pydirectinput":
         clicker.click(x, y)
     else:
         clicker.click(x, y)
-    time.sleep(CLICK_DELAY)
+
+    time.sleep(HOVER_DELAY)   # 노란색 변환 대기
+
+    # 2차 클릭 (줍기)
+    if clicker_type == "pydirectinput":
+        clicker.click(x, y)
+    else:
+        clicker.click(x, y)
+
+    time.sleep(CLICK2_DELAY)
 
 
 def get_ocr():
