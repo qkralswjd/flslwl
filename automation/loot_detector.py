@@ -45,51 +45,53 @@ def _get_ocr():
 
 
 # ── 리니지 클래식 아데나 이름표 색상 범위 ────────────────────────────────
-# 실제 픽셀 분석 결과 (adena_sample.png 기준):
-#   - 텍스트:  gray/silver  (HSV S≈0, V≈165)
-#   - 테두리:  흰색          (HSV S<30, V>220)
-# → 무채색 영역(흰+회색) 을 후보 박스로 사용
-_ADENA_COLOR_RANGES = [
-    # 흰색 테두리 (실측: S<30, V>220)
-    {"h_min": 0, "h_max": 180, "s_min": 0, "s_max": 40, "v_min": 200},
-    # 회색/은색 텍스트 (실측: S<50, V=140~210)
-    {"h_min": 0, "h_max": 180, "s_min": 0, "s_max": 50, "v_min": 140},
-]
+# 실제 픽셀 분석 결과 (adena_crop.png 실측):
+#   - 흰 테두리: HSV S<50, V>200 (S_max=50으로 약간 채도 있는 흰색도 포함)
+#   - 텍스트:    gray/silver (S<60, V=120~170) — 마우스 호버 전 기본 색상
+#   - 배경:      dark (V≈50~80)
+# 탐지 전략: 흰 테두리만 마스크 → dilation으로 이름표 전체 박스 연결
+_ADENA_WHITE_LOWER = (0,   0,   200)   # 흰 테두리 HSV 하한
+_ADENA_WHITE_UPPER = (180, 50,  255)   # 흰 테두리 HSV 상한
+_ADENA_DILATION_K  = 7                 # dilation 커널 크기 (7×7)
+_ADENA_DILATION_IT = 3                 # dilation 반복 횟수
+_ADENA_BOX_MIN_W   = 30                # 최소 박스 너비 (px)
+_ADENA_BOX_MIN_H   = 10                # 최소 박스 높이 (px)
 
 
 def _extract_candidate_boxes(
     crop_bgr: np.ndarray,
-    min_area: int = 30,
-    max_area: int = 8000,
     padding: int = 4,
 ) -> List[Tuple[int, int, int, int]]:
-    """HSV 색상 필터 + 컨투어로 아데나 이름표 후보 박스 (x,y,w,h) 추출."""
+    """흰 테두리 HSV 마스크 + dilation으로 아데나 이름표 후보 박스 (x,y,w,h) 추출.
+
+    전략:
+    - 흰 테두리(HSV S<50, V>200)만 마스크로 추출
+    - 7×7 kernel dilation × 3 → 얇은 테두리 선들을 하나의 덩어리로 연결
+    - bounding rect로 이름표 전체 영역 박스 생성
+    - w>30 & h>10 조건으로 작은 노이즈 제거
+
+    실측 결과 (adena_crop.png):
+    - 흰 테두리: x=25~159, y=26~61 (696픽셀)
+    - dilation 후: box(x=16, y=17, w=153, h=54) — 이름표 전체 포함
+    """
     hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
-    combined_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
 
-    for rng in _ADENA_COLOR_RANGES:
-        s_max = rng.get("s_max", 255)
-        mask = cv2.inRange(
-            hsv,
-            (rng["h_min"], rng["s_min"], rng["v_min"]),
-            (rng["h_max"], s_max,        255),
-        )
-        combined_mask = cv2.bitwise_or(combined_mask, mask)
+    # 흰 테두리 마스크
+    mask = cv2.inRange(hsv, _ADENA_WHITE_LOWER, _ADENA_WHITE_UPPER)
 
-    # 노이즈 제거 + 글자 연결
-    kernel = np.ones((3, 3), np.uint8)
-    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN,  kernel, iterations=1)
+    # dilation: 얇은 테두리 선들을 연결 → 이름표 전체 영역 확장
+    kernel = np.ones((_ADENA_DILATION_K, _ADENA_DILATION_K), np.uint8)
+    dilated = cv2.dilate(mask, kernel, iterations=_ADENA_DILATION_IT)
 
-    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     boxes = []
     h_crop, w_crop = crop_bgr.shape[:2]
     for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < min_area or area > max_area:
-            continue
         x, y, w, h = cv2.boundingRect(cnt)
+        # 작은 노이즈 제거 (w>30 & h>10)
+        if w < _ADENA_BOX_MIN_W or h < _ADENA_BOX_MIN_H:
+            continue
         # 패딩 추가 (글자가 잘리지 않도록)
         x1 = max(0, x - padding)
         y1 = max(0, y - padding)
@@ -97,68 +99,39 @@ def _extract_candidate_boxes(
         y2 = min(h_crop, y + h + padding)
         boxes.append((x1, y1, x2 - x1, y2 - y1))
 
-    # 인접 박스 병합 (같은 이름표 글자들을 하나로)
-    boxes = _merge_nearby_boxes(boxes, gap=12)
     return boxes
 
 
-def _merge_nearby_boxes(
-    boxes: List[Tuple[int, int, int, int]],
-    gap: int = 12,
-) -> List[Tuple[int, int, int, int]]:
-    """가까운 박스들을 하나로 병합."""
-    if not boxes:
-        return []
-
-    merged = True
-    result = list(boxes)
-    while merged:
-        merged = False
-        new_result = []
-        used = [False] * len(result)
-        for i, (x1, y1, w1, h1) in enumerate(result):
-            if used[i]:
-                continue
-            bx1, by1, bx2, by2 = x1, y1, x1 + w1, y1 + h1
-            for j, (x2, y2, w2, h2) in enumerate(result):
-                if i == j or used[j]:
-                    continue
-                cx1, cy1, cx2, cy2 = x2, y2, x2 + w2, y2 + h2
-                # 겹치거나 gap 이내이면 병합
-                if (bx1 - gap <= cx2 and bx2 + gap >= cx1 and
-                        by1 - gap <= cy2 and by2 + gap >= cy1):
-                    bx1 = min(bx1, cx1)
-                    by1 = min(by1, cy1)
-                    bx2 = max(bx2, cx2)
-                    by2 = max(by2, cy2)
-                    used[j] = True
-                    merged = True
-            new_result.append((bx1, by1, bx2 - bx1, by2 - by1))
-            used[i] = True
-        result = new_result
-    return result
 
 
 def _preprocess_patch(patch: np.ndarray) -> np.ndarray:
     """후보 패치를 OCR에 최적화된 형태로 전처리.
 
-    실측 최적 파라미터 (adena_sample.png 기준):
-    - 3배 업스케일
-    - 그레이스케일
-    - 임계값 150 이진화 역방향 (흰/회색 글씨→검은 글씨)
-    → tesseract psm6 kor+eng 에서 "마데나" 수준 인식
+    실측 최적 파라미터 (adena_crop.png 기준):
+    - 4배 업스케일 (INTER_CUBIC)
+    - 그레이스케일 변환
+    - 고정 임계값 135 역방향 이진화
+      * 배경(V≈50~100)   → 255(흰) — 배경 제거
+      * 글씨(V≈130~165)  →   0(검) — 회색/은색 텍스트 보존
+      * 흰 테두리(V≥200) →   0(검) — 테두리도 검게
+    - 3채널 변환 (easyocr/tesseract 입력 호환)
+
+    검증 결과 (tesseract psm=6, kor+eng):
+    - thresh=130 → '1마데나. [291]:' ✅
+    - thresh=135 → '마데나 123 1).'  ✅  ← 채택 (소음 최소)
+    - thresh=140 → '마데나 [29 ㅣ'   ✅
     """
     h, w = patch.shape[:2]
 
-    # 3배 강제 업스케일 (실측: scale=3 최적)
-    SCALE = 3
+    # 4배 업스케일
+    SCALE = 4
     patch = cv2.resize(patch, (w * SCALE, h * SCALE), interpolation=cv2.INTER_CUBIC)
 
     gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
 
-    # 고정 임계값 이진화: 회색 글씨(V≈165)를 검게, 흰 배경(V≥190)을 희게
+    # 고정 임계값 역방향 이진화
     # THRESH_BINARY_INV: 픽셀 > thresh → 0(검), ≤ thresh → 255(흰)
-    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    _, thresh = cv2.threshold(gray, 135, 255, cv2.THRESH_BINARY_INV)
 
     # 흑백 3채널로 변환 (easyocr/tesseract 입력 호환)
     thresh_3ch = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
