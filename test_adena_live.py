@@ -88,12 +88,11 @@ def get_clicker():
         port      = pico_cfg.get("serial_port", "COM4")
         baudrate  = pico_cfg.get("baudrate", 115200)
         pulse_ms  = pico_cfg.get("click_pulse_ms", 20)
-        worker = PicoSerialWorker(port=port, baudrate=baudrate,
-                                  click_pulse_ms=pulse_ms)
+        worker = PicoSerialWorker(port=port, baudrate=baudrate)
         worker.start()
         time.sleep(0.5)
-        print(f"[클릭] 피코 시리얼 ({port}, {baudrate}bps)")
-        return "pico", worker
+        print(f"[클릭] 피코 시리얼 ({port}, {baudrate}bps, pulse={pulse_ms}ms)")
+        return "pico", (worker, pulse_ms)
     except Exception as e:
         print(f"[클릭] 피코 연결 실패({e}) → pydirectinput 시도")
 
@@ -120,9 +119,10 @@ def do_click(clicker_type, clicker, x, y):
     if clicker is None or not CLICK_ENABLED:
         return
     if clicker_type == "pico":
-        clicker.click(x, y)          # 1차 (호버)
+        worker, pulse_ms = clicker
+        worker.click(x, y, pulse_ms)  # 1차 (호버)
         time.sleep(HOVER_DELAY)
-        clicker.click(x, y)          # 2차 (줍기)
+        worker.click(x, y, pulse_ms)  # 2차 (줍기)
     elif clicker_type == "pydirectinput":
         clicker.moveTo(x, y)
         time.sleep(0.05)
@@ -329,6 +329,7 @@ if __name__ == "__main__":
     if ocr_worker:
         ocr_worker.stop()
     if clicker_type == "pico" and clicker is not None:
-        clicker.stop()
+        worker, _ = clicker
+        worker.stop()
     cv2.destroyAllWindows()
     print("\n종료")
