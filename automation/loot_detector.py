@@ -54,8 +54,10 @@ _ADENA_WHITE_LOWER = (0,   0,   200)   # 흰 테두리 HSV 하한
 _ADENA_WHITE_UPPER = (180, 50,  255)   # 흰 테두리 HSV 상한
 _ADENA_DILATION_K  = 7                 # dilation 커널 크기 (7×7)
 _ADENA_DILATION_IT = 3                 # dilation 반복 횟수
-_ADENA_BOX_MIN_W   = 30                # 최소 박스 너비 (px)
-_ADENA_BOX_MIN_H   = 10                # 최소 박스 높이 (px)
+_ADENA_BOX_MIN_W   = 40                # 최소 박스 너비 (px)
+_ADENA_BOX_MIN_H   = 15                # 최소 박스 높이 (px)
+_ADENA_BOX_MAX_W   = 300               # 최대 박스 너비 (너무 크면 노이즈)
+_ADENA_BOX_MAX_H   = 80                # 최대 박스 높이
 
 
 def _extract_candidate_boxes(
@@ -89,8 +91,10 @@ def _extract_candidate_boxes(
     h_crop, w_crop = crop_bgr.shape[:2]
     for cnt in contours:
         x, y, w, h = cv2.boundingRect(cnt)
-        # 작은 노이즈 제거 (w>30 & h>10)
+        # 크기 필터 (너무 작거나 너무 큰 박스 제거)
         if w < _ADENA_BOX_MIN_W or h < _ADENA_BOX_MIN_H:
+            continue
+        if w > _ADENA_BOX_MAX_W or h > _ADENA_BOX_MAX_H:
             continue
         # 패딩 추가 (글자가 잘리지 않도록)
         x1 = max(0, x - padding)
@@ -184,16 +188,16 @@ class LootDetector:
         return False
 
     def find(self, frame: np.ndarray) -> List[Tuple[int, int, str, float]]:
-        """프레임에서 아이템 텍스트를 찾습니다.
+        """프레임에서 아데나 이름표를 HSV 박스 탐지로 찾습니다.
 
-        전략:
+        전략 (OCR 제거 — HSV만으로 즉시 반환):
             1. scan_region 크롭
-            2. HSV 색상 필터로 아데나 이름표 후보 박스 추출
-            3. 후보 박스마다 업스케일+OTSU 전처리 후 OCR
-            4. 키워드 매칭 → 절대 좌표 반환
+            2. HSV 흰 테두리 마스크 + dilation → 후보 박스 추출
+            3. 크기 필터로 오탐 제거
+            4. 박스 중심을 화면 절대좌표로 변환 → 즉시 반환
 
         Returns:
-            [(screen_x, screen_y, text, confidence), ...]
+            [(screen_x, screen_y, "adena", 1.0), ...]
         """
         now = time.time()
         if now - self._last_scan_time < self.scan_interval:
@@ -206,67 +210,34 @@ class LootDetector:
         ry = self.scan_region.get("y", 0)
         rw = self.scan_region.get("width",  frame.shape[1])
         rh = self.scan_region.get("height", frame.shape[0])
-        # 프레임 경계 초과 방지
         rw = min(rw, frame.shape[1] - rx)
         rh = min(rh, frame.shape[0] - ry)
         crop = frame[ry:ry + rh, rx:rx + rw]
         if crop.size == 0:
             return self._cached_loots
 
-        # ── HSV 색상 필터로 후보 박스 추출 ─────────────────────────
+        # ── HSV 흰 테두리 박스 탐지 ─────────────────────────────────
         boxes = _extract_candidate_boxes(crop)
 
         if not boxes:
-            logger.debug("[LootDetector] 후보 박스 없음 (아데나 색상 미탐지)")
+            logger.debug("[LootDetector] 후보 박스 없음")
             self._cached_loots = []
             return self._cached_loots
 
-        logger.debug(f"[LootDetector] 후보 박스 {len(boxes)}개 → OCR 시작")
-
-        # ── 후보 박스별 OCR ─────────────────────────────────────────
+        # ── 박스 중심 → 화면 절대좌표 변환 ─────────────────────────
         loots = []
-        try:
-            self._ensure_ocr()
-            for (bx, by, bw, bh) in boxes:
-                patch = crop[by:by + bh, bx:bx + bw]
-                if patch.size == 0:
-                    continue
-
-                processed = _preprocess_patch(patch)
-
-                results = self._ocr.readtext(
-                    processed,
-                    detail=1,
-                    paragraph=False,
-                    allowlist=None,
-                )
-
-                for (bbox, text, confidence) in results:
-                    if confidence < self.min_confidence:
-                        continue
-                    if not self._is_loot_text(text):
-                        continue
-
-                    # 박스 중심을 절대 좌표로 변환
-                    screen_x = (bx + bw // 2 + rx
-                                + self.roi_offset[0]
-                                + self.capture_offset[0])
-                    screen_y = (by + bh // 2 + ry
-                                + self.roi_offset[1]
-                                + self.capture_offset[1])
-
-                    loots.append((screen_x, screen_y, text.strip(), confidence))
-                    logger.info(
-                        f"[LootDetector] ✅ 발견: '{text}' "
-                        f"at ({screen_x},{screen_y}) conf={confidence:.2f}"
-                    )
-
-        except Exception as e:
-            logger.error(f"[LootDetector] OCR 오류: {e}")
-            return self._cached_loots
-
-        if not loots:
-            logger.debug(f"[LootDetector] 후보 {len(boxes)}개 OCR → 아데나 키워드 없음")
+        for (bx, by, bw, bh) in boxes:
+            screen_x = (bx + bw // 2 + rx
+                        + self.roi_offset[0]
+                        + self.capture_offset[0])
+            screen_y = (by + bh // 2 + ry
+                        + self.roi_offset[1]
+                        + self.capture_offset[1])
+            loots.append((screen_x, screen_y, "adena", 1.0))
+            logger.info(
+                f"[LootDetector] ✅ HSV탐지: at ({screen_x},{screen_y}) "
+                f"box={bw}×{bh}"
+            )
 
         self._cached_loots = loots
         return loots
