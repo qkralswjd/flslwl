@@ -1,25 +1,28 @@
 # Pico Image Auto Clicker - firmware (CircuitPython)
 #
 # Listens on the usb_cdc "data" serial channel for a small text protocol
-# and drives a USB HID relative mouse in response. See pc/pico_serial.py
-# for the PC-side counterpart.
+# and drives a USB HID relative mouse + keyboard in response.
+# See pc/pico_serial.py for the PC-side counterpart.
 #
 # Protocol (newline-terminated ASCII):
-#   PING            -> replies PONG
-#   MOVE:<dx>:<dy>  -> relative mouse move by (dx, dy) pixels, chunked to
-#                      the HID report's +-127 range -> OK:MOVE / ERR:MOVE
-#   CLICK[:<ms>]    -> left button down, wait <ms> (default 20), up
-#                      -> OK:CLICK / ERR:CLICK
-#   PRESS           -> left button down, held (for drag) -> OK:PRESS
-#   RELEASE         -> left button up -> OK:RELEASE
-#   STOP            -> no-op acknowledgement, used for emergency stop
-#                      -> OK:STOP
-#   anything else   -> ERR:UNKNOWN
+#   PING               -> replies PONG
+#   MOVE:<dx>:<dy>     -> relative mouse move by (dx, dy) pixels, chunked to
+#                         the HID report's +-127 range -> OK:MOVE / ERR:MOVE
+#   CLICK[:<ms>]       -> left button down, wait <ms> (default 20), up
+#                         -> OK:CLICK / ERR:CLICK
+#   PRESS              -> left button down, held (for drag) -> OK:PRESS
+#   RELEASE            -> left button up -> OK:RELEASE
+#   STOP               -> no-op acknowledgement, used for emergency stop
+#                         -> OK:STOP
+#   KEYDOWN:<keycode>  -> press keyboard key (HID keycode int) -> OK:KEYDOWN / ERR:KEYDOWN
+#   KEYUP:<keycode>    -> release keyboard key               -> OK:KEYUP   / ERR:KEYUP
+#   anything else      -> ERR:UNKNOWN
 
 import time
 
 import usb_cdc
 import usb_hid
+from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.mouse import Mouse
 
 DEFAULT_CLICK_PULSE_MS = 20
@@ -31,6 +34,7 @@ if serial is None:
     raise RuntimeError("usb_cdc.data is not enabled; power-cycle the Pico after copying boot.py")
 
 mouse = Mouse(usb_hid.devices)
+keyboard = Keyboard(usb_hid.devices)
 
 _rx_buffer = b""
 
@@ -96,6 +100,28 @@ def handle_command(cmd):
                 send("ERR:MOVE")
         else:
             send("ERR:MOVE")
+    elif cmd.startswith("KEYDOWN:"):
+        parts = cmd.split(":")
+        if len(parts) == 2:
+            try:
+                keycode = int(parts[1])
+                keyboard.press(keycode)
+                send("OK:KEYDOWN")
+            except Exception:
+                send("ERR:KEYDOWN")
+        else:
+            send("ERR:KEYDOWN")
+    elif cmd.startswith("KEYUP:"):
+        parts = cmd.split(":")
+        if len(parts) == 2:
+            try:
+                keycode = int(parts[1])
+                keyboard.release(keycode)
+                send("OK:KEYUP")
+            except Exception:
+                send("ERR:KEYUP")
+        else:
+            send("ERR:KEYUP")
     else:
         send("ERR:UNKNOWN")
 
