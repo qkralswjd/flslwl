@@ -3,9 +3,15 @@
 몬스터가 죽은 후 바닥에 나타나는 "아데나" 텍스트를
 easyocr로 탐지하여 클릭 좌표를 반환합니다.
 
+탐지 전략:
+    1. HSV 색상 필터로 아데나 이름표 후보 영역(노란/흰 텍스트) 추출
+    2. 컨투어로 텍스트 블럭 후보 박스 생성
+    3. 각 후보 박스를 업스케일 후 OCR → 키워드 매칭
+    → 전체 화면 OCR 대신 후보 영역만 OCR하므로 속도/정확도 모두 향상
+
 사용법:
     detector = LootDetector(
-        scan_region={"x": 0, "y": 0, "width": 1440, "height": 780},
+        scan_region={"x": 0, "y": 0, "width": 1920, "height": 850},
         loot_keywords=["아데나", "Adena"],
     )
     loots = detector.find(frame)
@@ -14,7 +20,7 @@ easyocr로 탐지하여 클릭 좌표를 반환합니다.
 
 import logging
 import time
-from typing import Optional
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -30,7 +36,6 @@ def _get_ocr():
         try:
             import easyocr
             logger.info("[LootDetector] easyocr 초기화 중...")
-            # 한국어 + 영어 동시 인식 (아데나 = 한글)
             _ocr_reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
             logger.info("[LootDetector] easyocr 초기화 완료")
         except ImportError:
@@ -39,38 +44,138 @@ def _get_ocr():
     return _ocr_reader
 
 
-def _preprocess_for_loot(crop: np.ndarray) -> np.ndarray:
-    """아데나 텍스트 인식을 위한 전처리.
+# ── 리니지 클래식 아데나 이름표 색상 범위 ────────────────────────────────
+# 아데나 텍스트: 노란색(주황~노랑) + 흰색 테두리
+# HSV: H=15~35(노랑/주황), S>80, V>150
+_ADENA_COLOR_RANGES = [
+    # 노란/주황 텍스트
+    {"h_min": 15, "h_max": 40, "s_min": 80, "v_min": 150},
+    # 흰색 테두리 (S 낮고 V 높음)
+    {"h_min": 0,  "h_max": 180, "s_min": 0, "s_max": 40, "v_min": 200},
+]
 
-    리니지 클래식 아데나 이름표: 갈색 배경 + 검정 텍스트 + 흰색 테두리.
-    원본 + 밝은버전 + 어두운버전 3종을 가로로 붙여 OCR 정확도를 높입니다.
+
+def _extract_candidate_boxes(
+    crop_bgr: np.ndarray,
+    min_area: int = 30,
+    max_area: int = 8000,
+    padding: int = 4,
+) -> List[Tuple[int, int, int, int]]:
+    """HSV 색상 필터 + 컨투어로 아데나 이름표 후보 박스 (x,y,w,h) 추출."""
+    hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+    combined_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+
+    for rng in _ADENA_COLOR_RANGES:
+        s_max = rng.get("s_max", 255)
+        mask = cv2.inRange(
+            hsv,
+            (rng["h_min"], rng["s_min"], rng["v_min"]),
+            (rng["h_max"], s_max,        255),
+        )
+        combined_mask = cv2.bitwise_or(combined_mask, mask)
+
+    # 노이즈 제거 + 글자 연결
+    kernel = np.ones((3, 3), np.uint8)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN,  kernel, iterations=1)
+
+    contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    boxes = []
+    h_crop, w_crop = crop_bgr.shape[:2]
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < min_area or area > max_area:
+            continue
+        x, y, w, h = cv2.boundingRect(cnt)
+        # 패딩 추가 (글자가 잘리지 않도록)
+        x1 = max(0, x - padding)
+        y1 = max(0, y - padding)
+        x2 = min(w_crop, x + w + padding)
+        y2 = min(h_crop, y + h + padding)
+        boxes.append((x1, y1, x2 - x1, y2 - y1))
+
+    # 인접 박스 병합 (같은 이름표 글자들을 하나로)
+    boxes = _merge_nearby_boxes(boxes, gap=12)
+    return boxes
+
+
+def _merge_nearby_boxes(
+    boxes: List[Tuple[int, int, int, int]],
+    gap: int = 12,
+) -> List[Tuple[int, int, int, int]]:
+    """가까운 박스들을 하나로 병합."""
+    if not boxes:
+        return []
+
+    merged = True
+    result = list(boxes)
+    while merged:
+        merged = False
+        new_result = []
+        used = [False] * len(result)
+        for i, (x1, y1, w1, h1) in enumerate(result):
+            if used[i]:
+                continue
+            bx1, by1, bx2, by2 = x1, y1, x1 + w1, y1 + h1
+            for j, (x2, y2, w2, h2) in enumerate(result):
+                if i == j or used[j]:
+                    continue
+                cx1, cy1, cx2, cy2 = x2, y2, x2 + w2, y2 + h2
+                # 겹치거나 gap 이내이면 병합
+                if (bx1 - gap <= cx2 and bx2 + gap >= cx1 and
+                        by1 - gap <= cy2 and by2 + gap >= cy1):
+                    bx1 = min(bx1, cx1)
+                    by1 = min(by1, cy1)
+                    bx2 = max(bx2, cx2)
+                    by2 = max(by2, cy2)
+                    used[j] = True
+                    merged = True
+            new_result.append((bx1, by1, bx2 - bx1, by2 - by1))
+            used[i] = True
+        result = new_result
+    return result
+
+
+def _preprocess_patch(patch: np.ndarray) -> np.ndarray:
+    """후보 패치를 OCR에 최적화된 형태로 전처리.
+
+    - 업스케일: 최소 높이 48px 목표
+    - 그레이스케일
+    - CLAHE 대비 향상
+    - OTSU 이진화
+    - 흑백 반전 버전도 추가 (어두운 배경에 밝은 글씨 대응)
     """
-    # 크기 업스케일 (작은 텍스트 인식률 향상)
-    h, w = crop.shape[:2]
-    scale = max(1, min(4, int(60 / max(h, 1))))   # 최소 글자높이 60px 목표
+    h, w = patch.shape[:2]
+
+    # 업스케일
+    target_h = 48
+    scale = max(1, int(np.ceil(target_h / max(h, 1))))
+    scale = min(scale, 6)
     if scale > 1:
-        crop = cv2.resize(crop, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+        patch = cv2.resize(patch, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
 
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
 
-    # ① 밝은 텍스트 (흰색 테두리)
-    _, bright = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+    # CLAHE 대비 향상 (조명 불균일 보정)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+    gray = clahe.apply(gray)
 
-    # ② 어두운 텍스트 (검정 글씨) — 반전
-    _, dark = cv2.threshold(gray, 80, 255, cv2.THRESH_BINARY_INV)
-
-    # ③ OTSU 자동 임계값
+    # OTSU 이진화
     _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, otsu_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     # 팽창으로 글자 연결
-    kernel = np.ones((2, 2), np.uint8)
-    bright = cv2.dilate(bright, kernel, iterations=1)
-    dark   = cv2.dilate(dark,   kernel, iterations=1)
-    otsu   = cv2.dilate(otsu,   kernel, iterations=1)
+    k = np.ones((2, 2), np.uint8)
+    otsu     = cv2.dilate(otsu,     k, iterations=1)
+    otsu_inv = cv2.dilate(otsu_inv, k, iterations=1)
 
-    # 가로로 붙여서 반환 (OCR이 가장 읽기 좋은 버전을 골라씀)
-    combined = np.hstack([bright, dark, otsu])
-    return combined
+    # 원본 gray + 정방향 + 역방향 → 가로로 붙임
+    gray_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    otsu_3ch     = cv2.cvtColor(otsu,     cv2.COLOR_GRAY2BGR)
+    otsu_inv_3ch = cv2.cvtColor(otsu_inv, cv2.COLOR_GRAY2BGR)
+
+    return np.hstack([gray_3ch, otsu_3ch, otsu_inv_3ch])
 
 
 class LootDetector:
@@ -117,12 +222,17 @@ class LootDetector:
                 return True
         return False
 
-    def find(self, frame: np.ndarray) -> list[tuple[int, int, str, float]]:
+    def find(self, frame: np.ndarray) -> List[Tuple[int, int, str, float]]:
         """프레임에서 아이템 텍스트를 찾습니다.
+
+        전략:
+            1. scan_region 크롭
+            2. HSV 색상 필터로 아데나 이름표 후보 박스 추출
+            3. 후보 박스마다 업스케일+OTSU 전처리 후 OCR
+            4. 키워드 매칭 → 절대 좌표 반환
 
         Returns:
             [(screen_x, screen_y, text, confidence), ...]
-            screen 좌표는 절대 화면 좌표 (Pico 클릭에 바로 사용 가능)
         """
         now = time.time()
         if now - self._last_scan_time < self.scan_interval:
@@ -130,51 +240,72 @@ class LootDetector:
 
         self._last_scan_time = now
 
-        # 스캔 영역 크롭
+        # ── 스캔 영역 크롭 ───────────────────────────────────────────
         rx = self.scan_region.get("x", 0)
         ry = self.scan_region.get("y", 0)
-        rw = self.scan_region.get("width", frame.shape[1])
+        rw = self.scan_region.get("width",  frame.shape[1])
         rh = self.scan_region.get("height", frame.shape[0])
+        # 프레임 경계 초과 방지
+        rw = min(rw, frame.shape[1] - rx)
+        rh = min(rh, frame.shape[0] - ry)
         crop = frame[ry:ry + rh, rx:rx + rw]
-
         if crop.size == 0:
             return self._cached_loots
 
-        # 전처리
-        processed = _preprocess_for_loot(crop)
+        # ── HSV 색상 필터로 후보 박스 추출 ─────────────────────────
+        boxes = _extract_candidate_boxes(crop)
 
-        # OCR
+        if not boxes:
+            logger.debug("[LootDetector] 후보 박스 없음 (아데나 색상 미탐지)")
+            self._cached_loots = []
+            return self._cached_loots
+
+        logger.debug(f"[LootDetector] 후보 박스 {len(boxes)}개 → OCR 시작")
+
+        # ── 후보 박스별 OCR ─────────────────────────────────────────
+        loots = []
         try:
             self._ensure_ocr()
-            results = self._ocr.readtext(processed, detail=1, paragraph=False)
+            for (bx, by, bw, bh) in boxes:
+                patch = crop[by:by + bh, bx:bx + bw]
+                if patch.size == 0:
+                    continue
+
+                processed = _preprocess_patch(patch)
+
+                results = self._ocr.readtext(
+                    processed,
+                    detail=1,
+                    paragraph=False,
+                    allowlist=None,
+                )
+
+                for (bbox, text, confidence) in results:
+                    if confidence < self.min_confidence:
+                        continue
+                    if not self._is_loot_text(text):
+                        continue
+
+                    # 박스 중심을 절대 좌표로 변환
+                    screen_x = (bx + bw // 2 + rx
+                                + self.roi_offset[0]
+                                + self.capture_offset[0])
+                    screen_y = (by + bh // 2 + ry
+                                + self.roi_offset[1]
+                                + self.capture_offset[1])
+
+                    loots.append((screen_x, screen_y, text.strip(), confidence))
+                    logger.info(
+                        f"[LootDetector] ✅ 발견: '{text}' "
+                        f"at ({screen_x},{screen_y}) conf={confidence:.2f}"
+                    )
+
         except Exception as e:
             logger.error(f"[LootDetector] OCR 오류: {e}")
             return self._cached_loots
 
-        loots = []
-        for (bbox, text, confidence) in results:
-            if confidence < self.min_confidence:
-                continue
-            if not self._is_loot_text(text):
-                continue
-
-            # bbox = [[x1,y1],[x2,y1],[x2,y2],[x1,y2]]
-            # 중심 좌표 계산 (crop 내 좌표)
-            pts = np.array(bbox)
-            cx_crop = int(pts[:, 0].mean())
-            cy_crop = int(pts[:, 1].mean())
-
-            # 절대 화면 좌표로 변환
-            # crop 내 좌표 → scan_region 내 좌표 → 캡처 내 좌표 → 절대 좌표
-            screen_x = (cx_crop + rx
-                        + self.roi_offset[0]
-                        + self.capture_offset[0])
-            screen_y = (cy_crop + ry
-                        + self.roi_offset[1]
-                        + self.capture_offset[1])
-
-            loots.append((screen_x, screen_y, text.strip(), confidence))
-            logger.info(f"[LootDetector] 발견: '{text}' at ({screen_x},{screen_y}) conf={confidence:.2f}")
+        if not loots:
+            logger.debug(f"[LootDetector] 후보 {len(boxes)}개 OCR → 아데나 키워드 없음")
 
         self._cached_loots = loots
         return loots

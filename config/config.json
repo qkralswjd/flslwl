@@ -15,7 +15,7 @@
         "height": 1080
     },
     "capture_fps": 60,
-    "detection_fps": 12,
+    "detection_fps": 6,
     "motion": {
         "history": 200,
         "var_threshold": 16,
@@ -86,7 +86,7 @@
     "realtime_template": {
         "_comment": "field 모드 전용 — RealtimeTemplateDetector 파라미터",
         "match_threshold": 0.55,
-        "scale_factors": [0.8, 1.0, 1.2],
+        "scale_factors": [1.0],
         "nms_iou_threshold": 0.30,
         "max_templates": null
     }
