@@ -14,10 +14,16 @@ Pico 통합:
 SceneMotionFilter 통합:
     플레이어가 이동해 화면 전체가 움직일 때 감지를 자동으로 일시정지합니다.
     config["scene_motion"]["enabled"] == true 일 때 활성화됩니다.
+    ※ field 모드는 RealtimeTemplateDetector를 사용하므로 SceneMotionFilter 불필요.
 
 HuntingStateMachine 통합 (1단계 자동 레벨링):
     config_automation.json 기반으로 동작.
     automation_config가 전달되면 자동 레벨링 상태머신이 활성화됩니다.
+
+field 모드 탐지 파이프라인:
+    MOG2 배경차분 대신 실시간 템플릿 매칭(RealtimeTemplateDetector)을 사용.
+    이동 중/정지 중 구분 없이 매 프레임 탐지 → SceneMotionFilter·warmup 불필요.
+    config/templates/ 의 PNG 파일을 직접 활용.
 """
 
 import json
@@ -35,6 +41,7 @@ from debug.debug_view import DebugView
 from detection.classifier import MonsterClassifier
 from detection.contour_detector import ContourDetector
 from detection.motion_detector import MotionDetector, SceneMotionFilter
+from detection.realtime_template_detector import RealtimeTemplateDetector
 from overlay.overlay import draw_enemies, draw_hud, draw_roi, draw_detection_zone
 from tracking.tracker import NearestNeighborTracker
 
@@ -95,10 +102,10 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
     Args:
         mode: "leveling" → 1~10레벨 자동사냥 (드래그, HuntingStateMachine ON, 템플릿매칭 OFF)
-              "dungeon"  → 던전 사냥 모드 (템플릿매칭 ON, HuntingStateMachine OFF)
+              "dungeon"  → 던전 사냥 모드 (MOG2+템플릿매칭 ON, HuntingStateMachine OFF)
               "field"    → 필드 이동 사냥 모드 (WaypointMover + HuntingStateMachine ON,
-                           SceneMotionFilter + SequentialTargetSM 던전과 동일 파이프라인,
-                           tracker를 HuntingStateMachine에 주입 → IDLE일 때만 다음 WP 이동)
+                           [NEW] RealtimeTemplateDetector — MOG2 완전 우회,
+                           이동 중에도 탐지 가능, SceneMotionFilter·warmup 불필요)
     """
     is_leveling = (mode == "leveling")
     is_field    = (mode == "field")
@@ -146,6 +153,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     drag_callback  = pico_drag  if (pico_worker and drag_enabled) else None
 
     # ── SceneMotionFilter 초기화 ───────────────────────────────────────
+    # field 모드는 RealtimeTemplateDetector 사용 → SceneMotionFilter 불필요
     sm_cfg = config.get("scene_motion", {})
     scene_filter = (
         SceneMotionFilter(
@@ -155,9 +163,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             crop_ratio          = sm_cfg.get("crop_ratio",          0.6),
             move_confirm_frames = sm_cfg.get("move_confirm_frames",   2),
         )
-        if sm_cfg.get("enabled", True)
+        if (sm_cfg.get("enabled", True) and not is_field)
         else None
     )
+    if is_field:
+        logger.info("[Field] SceneMotionFilter 비활성화 — RealtimeTemplateDetector 사용")
 
     # capture_region → 모니터 내 offset
     cap_region = config.get("capture_region")
@@ -225,7 +235,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
         logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
 
     clf_config = config.get("classifier", {})
-    # 레벨링/필드 모드에서는 템플릿 매칭 OFF
+    # 레벨링/필드 모드에서는 MOG2 후처리용 MonsterClassifier OFF
+    # (field 모드는 RealtimeTemplateDetector가 자체 매칭 수행)
     classifier = (
         MonsterClassifier(
             clf_config.get("templates_dir") or get_templates_dir(),
@@ -235,13 +246,28 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             excluded_color_ratio=clf_config.get("excluded_color_ratio", 0.2),
             min_size_ratio=clf_config.get("min_size_ratio", 0.6),
         )
-        if (clf_config.get("enabled") and not is_leveling)
+        if (clf_config.get("enabled") and not is_leveling and not is_field)
         else None
     )
     if is_leveling:
-        logger.info("[Mode] 레벨링 모드: 템플릿 매칭 비활성화")
+        logger.info("[Mode] 레벨링 모드: MOG2 템플릿 매칭 비활성화")
+
+    # ── field 모드 전용: RealtimeTemplateDetector 초기화 ─────────────
+    rtm_cfg = config.get("realtime_template", {})
+    rt_detector = None
     if is_field:
-        logger.info("[Mode] 필드 모드: 템플릿 매칭 ON (던전과 동일)")
+        rt_detector = RealtimeTemplateDetector(
+            templates_dir    = clf_config.get("templates_dir") or get_templates_dir(),
+            match_threshold  = rtm_cfg.get("match_threshold",   0.55),
+            scale_factors    = rtm_cfg.get("scale_factors",     [0.8, 1.0, 1.2]),
+            nms_iou_threshold= rtm_cfg.get("nms_iou_threshold", 0.30),
+            max_templates    = rtm_cfg.get("max_templates",      None),
+        )
+        logger.info(
+            f"[Field] RealtimeTemplateDetector 준비 완료 "
+            f"(threshold={rtm_cfg.get('match_threshold', 0.55)} "
+            f"scales={rtm_cfg.get('scale_factors', [0.8, 1.0, 1.2])})"
+        )
 
     debug_view = (
         DebugView(motion_detector, contour_detector, WINDOW_NAME, classifier=classifier)
@@ -260,10 +286,10 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     enemies              = []
     last_mask            = None
     last_roi_frame       = None
-    is_moving            = False   # SceneMotionFilter 결과
+    is_moving            = False   # SceneMotionFilter 결과 (dungeon/leveling 모드)
     _field_patrol_moving = False   # 필드모드: patrol_mover가 이동 명령 중인지
-    _field_mog2_reset_needed = False  # 이동 완료 후 MOG2 리셋 플래그
-    _field_warmup_frames = 0       # MOG2 리셋 후 warmup 카운트
+    _field_mog2_reset_needed = False  # (레거시 — field 모드에서는 미사용)
+    _field_warmup_frames = 0       # (레거시 — field 모드에서는 미사용)
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     # 창을 지정 모니터로 이동 (window_monitor_x/y 설정 기준)
@@ -300,36 +326,22 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             roi_frame, roi_offset_val = _slice_roi(frame, config.get("roi"))
 
             # ── 필드모드: patrol_mover 이동 상태 추적 ───────────────
-            # patrol_mover가 MOVING 중이면 SceneMotionFilter를 바이패스하고
-            # MOG2를 리셋해야 함. 이동 완료 시 리셋 + warmup 후 탐지 재개.
+            # RealtimeTemplateDetector는 이동 중에도 탐지 가능하므로
+            # 이동 여부와 관계없이 탐지를 계속 실행.
+            # (표시용으로만 _field_patrol_moving 추적)
             if is_field and hunting_sm is not None:
                 from automation.state_machine import HuntingState
                 _pm = hunting_sm.patrol_mover
-                _prev_patrol_moving = _field_patrol_moving
                 _field_patrol_moving = (
                     hunting_sm.state == HuntingState.HUNTING_10
                     and _pm._state == "MOVING"
                 )
-                # 이동 완료 순간(MOVING→비MOVING) 감지 → MOG2 리셋 예약
-                if _prev_patrol_moving and not _field_patrol_moving:
-                    logger.info("[Field] 순찰 이동 완료 → MOG2 리셋 + warmup 시작")
-                    motion_detector.reset()
-                    tracker._sm.reset()
-                    _field_mog2_reset_needed = False
-                    _field_warmup_frames = sm_cfg.get("settle_frames", 5)
 
-            # ── SceneMotionFilter: 이동 중이면 감지 스킵 ──────────────
-            # 필드모드에서 patrol_mover가 이동 명령 중이면 SceneMotionFilter 무시
-            # (내가 이동하는 건데 "지형이 움직인다"고 오판하는 것 방지)
-            if is_field and _field_patrol_moving:
-                # 순찰 이동 중: SceneFilter 피드만 소비 (판정 무시), MOG2 동결
-                if scene_filter is not None:
-                    scene_filter.update(roi_frame)  # 내부 버퍼 유지용
-                is_moving = True  # 탐지 차단
-            elif scene_filter is not None:
+            # ── SceneMotionFilter: dungeon/leveling 모드 전용 ─────────
+            # field 모드는 scene_filter=None이므로 항상 is_moving=False
+            if scene_filter is not None:
                 is_moving = scene_filter.update(roi_frame)
                 if is_moving:
-                    # 상태머신도 리셋 (이동 중 쌓인 적 목록 초기화)
                     tracker._sm.reset()
             else:
                 is_moving = False
@@ -344,51 +356,79 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             # dungeon 모드는 항상 탐지
             _detection_allowed = (hunting_sm is None) or _is_hunt_state
 
-            # 필드모드 warmup 중: MOG2 피드 공급하되 탐지 결과는 버림
-            if is_field and _field_warmup_frames > 0 and not is_moving:
-                motion_detector.get_mask(roi_frame, learning_rate=-1.0)
-                _field_warmup_frames -= 1
-                if _field_warmup_frames == 0:
-                    logger.info("[Field] MOG2 warmup 완료 → 탐지 재개")
-
             if now - last_detection_time >= detection_interval:
-                # 필드 warmup 중에는 탐지 차단
-                _warmup_blocking = is_field and (_field_warmup_frames > 0)
-                if not is_moving and _detection_allowed and not _warmup_blocking:
-                    # ── 정지 중 + 사냥터일 때만 감지 실행 ────────────
+                if _detection_allowed:
                     if debug_view:
                         debug_view.read_trackbars()
 
                     proc_start = time.time()
-                    # 정지 중: 정상 학습 (learningRate=-1 → MOG2 자동)
-                    mask       = motion_detector.get_mask(roi_frame, learning_rate=-1.0)
-                    detections = contour_detector.detect(mask)
 
-                    # ── detection_zone 필터 ────────────────────────────
-                    dz = config.get("detection_zone")
-                    if dz and dz.get("enabled", False):
-                        rw = roi_dict.get("width",  1440) if roi_dict else 1440
-                        rh = roi_dict.get("height",  780) if roi_dict else  780
-                        cx = dz.get("center_x", rw // 2)
-                        cy = dz.get("center_y", rh // 2)
-                        hw = dz.get("half_width",  400)
-                        hh = dz.get("half_height", 300)
-                        x0, y0 = cx - hw, cy - hh
-                        x1, y1 = cx + hw, cy + hh
-                        detections = [
-                            d for d in detections
-                            if x0 <= d.center_x <= x1 and y0 <= d.center_y <= y1
-                        ]
+                    if is_field and rt_detector is not None:
+                        # ════════════════════════════════════════════════════
+                        # [FIELD 모드] RealtimeTemplateDetector
+                        # — MOG2 완전 우회, 이동 중/정지 중 항상 탐지
+                        # ════════════════════════════════════════════════════
+                        detections = rt_detector.detect(roi_frame)
 
-                    if classifier is not None:
-                        detections = classifier.confirm(detections, roi_frame)
+                        # detection_zone 필터 (field 모드도 동일 적용)
+                        dz = config.get("detection_zone")
+                        if dz and dz.get("enabled", False):
+                            rw = roi_dict.get("width",  1440) if roi_dict else 1440
+                            rh = roi_dict.get("height",  780) if roi_dict else  780
+                            cx = dz.get("center_x", rw // 2)
+                            cy = dz.get("center_y", rh // 2)
+                            hw = dz.get("half_width",  400)
+                            hh = dz.get("half_height", 300)
+                            x0, y0 = cx - hw, cy - hh
+                            x1, y1 = cx + hw, cy + hh
+                            detections = [
+                                d for d in detections
+                                if x0 <= d.center_x <= x1 and y0 <= d.center_y <= y1
+                            ]
+
+                        last_mask      = None   # MOG2 마스크 없음
+                        last_roi_frame = roi_frame
+
+                    else:
+                        # ════════════════════════════════════════════════════
+                        # [DUNGEON / LEVELING 모드] MOG2 파이프라인
+                        # ════════════════════════════════════════════════════
+                        if not is_moving:
+                            # 정지 중: 정상 학습
+                            mask       = motion_detector.get_mask(roi_frame, learning_rate=-1.0)
+                            detections = contour_detector.detect(mask)
+
+                            # detection_zone 필터
+                            dz = config.get("detection_zone")
+                            if dz and dz.get("enabled", False):
+                                rw = roi_dict.get("width",  1440) if roi_dict else 1440
+                                rh = roi_dict.get("height",  780) if roi_dict else  780
+                                cx = dz.get("center_x", rw // 2)
+                                cy = dz.get("center_y", rh // 2)
+                                hw = dz.get("half_width",  400)
+                                hh = dz.get("half_height", 300)
+                                x0, y0 = cx - hw, cy - hh
+                                x1, y1 = cx + hw, cy + hh
+                                detections = [
+                                    d for d in detections
+                                    if x0 <= d.center_x <= x1 and y0 <= d.center_y <= y1
+                                ]
+
+                            if classifier is not None:
+                                detections = classifier.confirm(detections, roi_frame)
+
+                            last_mask      = mask
+                            last_roi_frame = roi_frame
+                        else:
+                            # 이동 중: MOG2 동결 + 적 목록 비우기
+                            motion_detector.get_mask(roi_frame, learning_rate=0.0)
+                            detections = []
 
                     dt = now - last_tracker_update
                     last_tracker_update = now
 
                     # ── TargetSM 활성 여부 ────────────────────────────────
                     # field 모드: state_machine이 tracker._sm.set_active()를 직접 제어
-                    #   → main.py에서 중복 설정하지 않음
                     # leveling 모드: HUNTING_10일 때만 active
                     # dungeon 모드 (hunting_sm=None): 항상 active(기본값 True)
                     if hunting_sm is not None and not is_field:
@@ -406,13 +446,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     if proc_elapsed_ms > 0:
                         detection_fps_smooth = 0.9 * detection_fps_smooth + 0.1 * (1000.0 / proc_elapsed_ms)
 
-                    last_mask      = mask
-                    last_roi_frame = roi_frame
                 else:
-                    # ── 이동 중 or 사냥터 아님: MOG2 동결 + 적 목록 비우기
-                    # 필드 순찰 이동 중: learningRate=0 (배경 모델 동결)
-                    # → 이동 완료 후 reset()으로 깨끗하게 재학습
-                    motion_detector.get_mask(roi_frame, learning_rate=0.0)
+                    # 사냥터 아님: 탐지 건너뜀, SM 업데이트만
                     enemies = []
                     if hunting_sm is not None:
                         hunting_sm.update(roi_frame, enemies)
@@ -424,8 +459,15 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             draw_roi(display_frame, config.get("roi"))
             draw_detection_zone(display_frame, config.get("detection_zone"), roi_offset_val)
 
-            # 이동 중이면 오버레이에 "MOVING" 표시
-            if is_moving:
+            # 이동 중이면 오버레이에 표시
+            # field 모드: 이동 중에도 탐지 계속 → "PATROL MOVING" 표시
+            if is_field and _field_patrol_moving:
+                cv2.putText(
+                    display_frame, "PATROL MOVING - TEMPLATE MATCHING ACTIVE",
+                    (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
+                    (0, 200, 100), 2, cv2.LINE_AA,
+                )
+            elif is_moving:
                 cv2.putText(
                     display_frame, "MOVING - DETECTION PAUSED",
                     (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
@@ -436,12 +478,10 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             if hunting_sm is not None:
                 sm_status = hunting_sm.get_status()
 
-                # 필드모드: 순찰 서브상태 표시 (PATROL / COMBAT / WARMUP)
+                # 필드모드: 순찰 서브상태 표시 (PATROL / SCAN / COMBAT / LOOT_SCAN)
                 _field_sub = ""
                 if is_field and sm_status["state"] == "HUNTING_10":
-                    if _field_warmup_frames > 0:
-                        _field_sub = f" [WARMUP {_field_warmup_frames}f]"
-                    elif _field_patrol_moving:
+                    if _field_patrol_moving:
                         _wp_label  = hunting_sm.patrol_mover.current_label
                         _field_sub = f" [PATROL→{_wp_label}]"
                     else:
@@ -476,9 +516,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                 }
                 # 필드모드 순찰 이동 중: 주황색으로 구분
                 if is_field and _field_patrol_moving:
-                    sm_color = (0, 165, 255)   # 주황
-                elif is_field and _field_warmup_frames > 0:
-                    sm_color = (200, 200, 0)   # 노란색 (워밍업)
+                    sm_color = (0, 165, 255)   # 주황 — 이동 중
                 else:
                     sm_color = color_map.get(sm_status["state"], (200, 200, 200))
                 cv2.putText(

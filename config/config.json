@@ -82,5 +82,12 @@
         "center_y": 540,
         "half_width": 600,
         "half_height": 400
+    },
+    "realtime_template": {
+        "_comment": "field 모드 전용 — RealtimeTemplateDetector 파라미터",
+        "match_threshold": 0.55,
+        "scale_factors": [0.8, 1.0, 1.2],
+        "nms_iou_threshold": 0.30,
+        "max_templates": null
     }
 }
