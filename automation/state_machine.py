@@ -768,6 +768,12 @@ class HuntingStateMachine:
             if self._tracker is not None:
                 self._tracker._sm.set_active(False)
 
+            # LOOT_SCAN 진입 직후 캐시 무효화 → 이전 캐시 오탐 방지
+            # (최초 1회만 무효화: _last_scan_time이 0이면 이미 무효화된 상태)
+            if self.loot_detector._last_scan_time != 0.0:
+                self.loot_detector.invalidate()
+                return  # 다음 tick에서 즉시 재스캔
+
             loot = self.loot_detector.find(frame)
             if loot:
                 logger.info(f"[HuntingSM] 아데나 {len(loot)}개 발견 → LOOTING")

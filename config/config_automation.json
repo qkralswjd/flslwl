@@ -107,18 +107,18 @@
     "loot": {
         "_comment": "아데나 줍기 설정",
         "scan_region": {
-            "_comment": "아데나 텍스트 탐색 영역 (절대 화면 기준)",
+            "_comment": "아데나 텍스트 탐색 영역 — UI(하단 채팅창/스킬바) 제외한 게임 화면만",
             "x": 0,
             "y": 0,
-            "width": 1440,
-            "height": 780
+            "width": 1920,
+            "height": 850
         },
         "keywords": [
             "아데나",
             "Adena",
             "adena"
         ],
-        "scan_interval_s": 0.5,
+        "scan_interval_s": 0.3,
         "click_interval_ms": 400,
         "timeout_ms": 3000
     },
