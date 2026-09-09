@@ -268,6 +268,10 @@ class HuntingStateMachine:
         #   - KILL_WAIT 대신 tracker._sm.state == IDLE 복귀 감지
         # tracker=None 이면 기존 직접 click+drag 방식 유지
         self._tracker = tracker
+        if tracker is not None:
+            logger.info(f"[HuntingSM] field 모드 — tracker 주입 완료 ({type(tracker).__name__})")
+        else:
+            logger.info("[HuntingSM] tracker=None — 기존 직접 click+drag 모드")
 
     # ── 공개 API ──────────────────────────────────────────────────────────
 
@@ -586,6 +590,8 @@ class HuntingStateMachine:
         # ── [SCAN] 도착 지점 탐지 ────────────────────────────────────
         if self._pc_state == "SCAN":
             # ── field 모드: tracker._sm에 공격 위임 ──────────────────
+            if self._tracker is None:
+                logger.debug("[HuntingSM][SCAN] tracker=None → 기존모드 경로")
             if self._tracker is not None:
                 from tracking.tracker import TargetState
                 sm = self._tracker._sm
