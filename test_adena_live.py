@@ -21,6 +21,9 @@ import queue
 import json
 import os
 
+# 피코 모듈 경로 추가
+sys.path.insert(0, os.path.dirname(__file__))
+
 # ── config.json에서 detection_zone 읽기 ───────────────────────────
 def _load_scan_region():
     """config/config.json의 detection_zone을 SCAN_REGION으로 변환.
@@ -75,29 +78,52 @@ MIN_CONF     = 0.03
 
 
 def get_clicker():
+    """피코 시리얼 클릭 우선 → 없으면 pydirectinput → pyautogui"""
+    try:
+        from pico.pico_serial import PicoSerialWorker
+        cfg_path = os.path.join(os.path.dirname(__file__), "config", "config.json")
+        with open(cfg_path, encoding="utf-8") as f:
+            cfg = json.load(f)
+        pico_cfg = cfg.get("pico", {})
+        port      = pico_cfg.get("serial_port", "COM4")
+        baudrate  = pico_cfg.get("baudrate", 115200)
+        pulse_ms  = pico_cfg.get("click_pulse_ms", 20)
+        worker = PicoSerialWorker(port=port, baudrate=baudrate,
+                                  click_pulse_ms=pulse_ms)
+        worker.start()
+        time.sleep(0.5)
+        print(f"[클릭] 피코 시리얼 ({port}, {baudrate}bps)")
+        return "pico", worker
+    except Exception as e:
+        print(f"[클릭] 피코 연결 실패({e}) → pydirectinput 시도")
+
     try:
         import pydirectinput
         pydirectinput.FAILSAFE = False
-        print("[클릭] pydirectinput")
+        print("[클릭] pydirectinput (fallback)")
         return "pydirectinput", pydirectinput
     except ImportError:
         pass
     try:
         import pyautogui
         pyautogui.FAILSAFE = False
-        print("[클릭] pyautogui")
+        print("[클릭] pyautogui (fallback)")
         return "pyautogui", pyautogui
     except ImportError:
         pass
-    print("[경고] 클릭 라이브러리 없음 — pip install pydirectinput")
+    print("[경고] 클릭 라이브러리 없음")
     return None, None
 
 
 def do_click(clicker_type, clicker, x, y):
-    """이동 → 1차 클릭 → HOVER_DELAY → 2차 클릭"""
+    """피코: click(x,y) 2회 / pydirectinput: moveTo → click 2회"""
     if clicker is None or not CLICK_ENABLED:
         return
-    if clicker_type == "pydirectinput":
+    if clicker_type == "pico":
+        clicker.click(x, y)          # 1차 (호버)
+        time.sleep(HOVER_DELAY)
+        clicker.click(x, y)          # 2차 (줍기)
+    elif clicker_type == "pydirectinput":
         clicker.moveTo(x, y)
         time.sleep(0.05)
         clicker.click()
@@ -195,7 +221,7 @@ class OcrWorker(threading.Thread):
 if __name__ == "__main__":
     clicker_type, clicker = get_clicker()
     print(f"[설정] 클릭={'ON ✅' if CLICK_ENABLED and clicker else 'OFF'}"
-          f"  HOVER={HOVER_DELAY}s  RECLICK={RECLICK_INTERVAL}s")
+          f"  방식={clicker_type}  HOVER={HOVER_DELAY}s  RECLICK={RECLICK_INTERVAL}s")
 
     # ── 이미지 단발 테스트 ────────────────────────────────────────
     if len(sys.argv) > 1:
@@ -302,5 +328,7 @@ if __name__ == "__main__":
 
     if ocr_worker:
         ocr_worker.stop()
+    if clicker_type == "pico" and clicker is not None:
+        clicker.stop()
     cv2.destroyAllWindows()
     print("\n종료")
