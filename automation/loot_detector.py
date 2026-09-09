@@ -45,13 +45,15 @@ def _get_ocr():
 
 
 # ── 리니지 클래식 아데나 이름표 색상 범위 ────────────────────────────────
-# 아데나 텍스트: 노란색(주황~노랑) + 흰색 테두리
-# HSV: H=15~35(노랑/주황), S>80, V>150
+# 실제 픽셀 분석 결과 (adena_sample.png 기준):
+#   - 텍스트:  gray/silver  (HSV S≈0, V≈165)
+#   - 테두리:  흰색          (HSV S<30, V>220)
+# → 무채색 영역(흰+회색) 을 후보 박스로 사용
 _ADENA_COLOR_RANGES = [
-    # 노란/주황 텍스트
-    {"h_min": 15, "h_max": 40, "s_min": 80, "v_min": 150},
-    # 흰색 테두리 (S 낮고 V 높음)
-    {"h_min": 0,  "h_max": 180, "s_min": 0, "s_max": 40, "v_min": 200},
+    # 흰색 테두리 (실측: S<30, V>220)
+    {"h_min": 0, "h_max": 180, "s_min": 0, "s_max": 40, "v_min": 200},
+    # 회색/은색 텍스트 (실측: S<50, V=140~210)
+    {"h_min": 0, "h_max": 180, "s_min": 0, "s_max": 50, "v_min": 140},
 ]
 
 
@@ -140,42 +142,27 @@ def _merge_nearby_boxes(
 def _preprocess_patch(patch: np.ndarray) -> np.ndarray:
     """후보 패치를 OCR에 최적화된 형태로 전처리.
 
-    - 업스케일: 최소 높이 48px 목표
+    실측 최적 파라미터 (adena_sample.png 기준):
+    - 3배 업스케일
     - 그레이스케일
-    - CLAHE 대비 향상
-    - OTSU 이진화
-    - 흑백 반전 버전도 추가 (어두운 배경에 밝은 글씨 대응)
+    - 임계값 150 이진화 역방향 (흰/회색 글씨→검은 글씨)
+    → tesseract psm6 kor+eng 에서 "마데나" 수준 인식
     """
     h, w = patch.shape[:2]
 
-    # 업스케일
-    target_h = 48
-    scale = max(1, int(np.ceil(target_h / max(h, 1))))
-    scale = min(scale, 6)
-    if scale > 1:
-        patch = cv2.resize(patch, (w * scale, h * scale), interpolation=cv2.INTER_CUBIC)
+    # 3배 강제 업스케일 (실측: scale=3 최적)
+    SCALE = 3
+    patch = cv2.resize(patch, (w * SCALE, h * SCALE), interpolation=cv2.INTER_CUBIC)
 
     gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
 
-    # CLAHE 대비 향상 (조명 불균일 보정)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
-    gray = clahe.apply(gray)
+    # 고정 임계값 이진화: 회색 글씨(V≈165)를 검게, 흰 배경(V≥190)을 희게
+    # THRESH_BINARY_INV: 픽셀 > thresh → 0(검), ≤ thresh → 255(흰)
+    _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
 
-    # OTSU 이진화
-    _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    _, otsu_inv = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    # 팽창으로 글자 연결
-    k = np.ones((2, 2), np.uint8)
-    otsu     = cv2.dilate(otsu,     k, iterations=1)
-    otsu_inv = cv2.dilate(otsu_inv, k, iterations=1)
-
-    # 원본 gray + 정방향 + 역방향 → 가로로 붙임
-    gray_3ch = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    otsu_3ch     = cv2.cvtColor(otsu,     cv2.COLOR_GRAY2BGR)
-    otsu_inv_3ch = cv2.cvtColor(otsu_inv, cv2.COLOR_GRAY2BGR)
-
-    return np.hstack([gray_3ch, otsu_3ch, otsu_inv_3ch])
+    # 흑백 3채널로 변환 (easyocr/tesseract 입력 호환)
+    thresh_3ch = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+    return thresh_3ch
 
 
 class LootDetector:
@@ -200,7 +187,8 @@ class LootDetector:
             capture_offset: 캡처 영역 오프셋 (ox, oy)
         """
         self.scan_region    = scan_region
-        self.loot_keywords  = loot_keywords or ["아데나", "Adena", "adena", "ADENA"]
+        # "데나" 추가: OCR 오인식 시 부분 매칭 허용 ("마데나", "1마데나" 등)
+        self.loot_keywords  = loot_keywords or ["아데나", "데나", "Adena", "adena", "ADENA"]
         self.scan_interval  = scan_interval_s
         self.min_confidence = min_confidence
         self.roi_offset     = roi_offset
