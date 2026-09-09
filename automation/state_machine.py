@@ -321,6 +321,17 @@ class HuntingStateMachine:
         self.hunt_mover.start()
         self._enter(HuntingState.MOVE_TO_HUNT_ZONE)
 
+    def start_at_hunting_10(self) -> None:
+        """hunt_waypoints 이동 없이 바로 HUNTING_10(순찰+전투) 시작.
+
+        이미 사냥터에 캐릭터가 있을 때 사용합니다.
+        """
+        logger.info("=" * 60)
+        logger.info("[HuntingSM] ▶ 순찰 사냥 즉시 시작 (HUNTING_10 직진입)")
+        logger.info(f"  목표 레벨: Lv.{self.target_level_hunt}")
+        logger.info("=" * 60)
+        self._enter(HuntingState.HUNTING_10)
+
     def stop(self) -> None:
         """중지 및 IDLE 복귀."""
         logger.info("[HuntingSM] ■ 중지")

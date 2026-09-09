@@ -216,8 +216,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             tracker       = _sm_tracker,
         )
         if is_field:
-            hunting_sm.start_at_hunt_zone()
-            logger.info("[Automation] HuntingStateMachine 시작 — field 모드 (MOVE_TO_HUNT_ZONE)")
+            hunting_sm.start_at_hunting_10()   # 이미 사냥터 — 바로 순찰+전투 시작
+            logger.info("[Automation] HuntingStateMachine 시작 — field 모드 (HUNTING_10 직진입)")
         else:
             hunting_sm.start_at_dummy()   # leveling: 허수아비 공격부터 시작
             logger.info("[Automation] HuntingStateMachine 시작 — ATTACKING_DUMMY")
