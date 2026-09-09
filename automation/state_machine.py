@@ -221,6 +221,7 @@ class HuntingStateMachine:
         self._pc_kill_start_t   = 0.0        # 공격 완료 시각
         self._pc_last_atk_t     = 0.0        # 마지막 공격 시각
         self._pc_attack_count   = 0          # 현재 WP에서 공격 횟수
+        self._pc_scan_start_t   = 0.0        # SCAN 진입 시각 (3초 idle 타임아웃용)
 
         # ── 아데나 탐지기 ─────────────────────────────────────────────
         loot_cfg = config.get("loot", {})
@@ -243,7 +244,8 @@ class HuntingStateMachine:
         self._loot_return_state   = HuntingState.HUNTING_10  # 루팅 후 복귀 상태
 
         # ── 사냥 중 적 비활성 타임아웃 ────────────────────────────────
-        self._hunt_idle_timeout   = 3.0   # 적 없을 때 이 시간 초과 → 웨이포인트 이동
+        # config_automation.json patrol_waypoints.idle_timeout_s 로 설정 가능
+        self._hunt_idle_timeout   = pwp_cfg.get("idle_timeout_s", 3.0)
         self._last_enemy_seen_t   = time.time()
 
         # ── 속도 물약 대기 ─────────────────────────────────────────────
@@ -555,15 +557,30 @@ class HuntingStateMachine:
             if self._tracker is not None:
                 from tracking.tracker import TargetState
                 if self._tracker._sm.state != TargetState.IDLE:
-                    # 전투 중 — 이동 멈추고 적 처리 대기
+                    # 전투 중 — patrol_mover 이동 클릭 차단, 적 처리 대기
+                    return
+
+                # ── 이동 중에도 적 발견 시 즉시 SCAN 전환 ─────────────
+                # main.py가 SceneMotionFilter를 바이패스하므로
+                # 이동 중 탐지된 enemies도 유효한 실제 적임
+                if enemies and self.patrol_mover._state == "MOVING":
+                    label = self.patrol_mover.current_label
+                    logger.info(
+                        f"[HuntingSM][field] 이동 중 적 {len(enemies)}명 발견 "
+                        f"('{label}') → 즉시 SCAN 전환"
+                    )
+                    # patrol_mover는 MOVING 상태 유지 (다음 PATROL 진입 시 계속)
+                    self._pc_state        = "SCAN"
+                    self._pc_attack_count = 0
                     return
 
             status = self.patrol_mover.tick(self.pico)
             if status == "ARRIVED":
                 label = self.patrol_mover.current_label
-                logger.info(f"[HuntingSM] 순찰 '{label}' 도착 → 전투 스캔")
+                logger.info(f"[HuntingSM] 순찰 '{label}' 도착 → 전투 스캔 (3초 대기)")
                 self._pc_state        = "SCAN"
                 self._pc_attack_count = 0
+                self._pc_scan_start_t = now   # SCAN 진입 시각 기록
             return
 
         # ── [SCAN] 도착 지점 탐지 ────────────────────────────────────
@@ -575,14 +592,15 @@ class HuntingStateMachine:
 
                 # SM이 이미 전투 중(비IDLE) → 완료 대기
                 if sm.state != TargetState.IDLE:
-                    # 최대 공격 횟수 누적 (SM이 COOLDOWN→IDLE 할 때마다 카운트)
                     return
 
                 # SM이 IDLE = 전투 완료 또는 적 없음
                 if enemies:
                     # 적 있음 → SM 활성화해서 자동 공격 시작
+                    # (이동 중 발견한 적도 포함 — MOG2 리셋 후 탐지된 실제 적)
                     sm.set_active(True)
                     self._pc_attack_count += 1
+                    self._pc_scan_start_t = now  # 적 발견 시 타임아웃 리셋
                     logger.info(
                         f"[HuntingSM][field] 적 {len(enemies)}명 감지 "
                         f"→ SequentialTargetSM 공격 위임 "
@@ -592,32 +610,31 @@ class HuntingStateMachine:
                     self._pc_state = "KILL_WAIT"
                     return
 
-                # 적 없음 → 아데나 체크
-                loot = self.loot_detector.find(frame)
-                if loot:
-                    logger.info(f"[HuntingSM][field] 아데나 {len(loot)}개 발견 → LOOTING")
-                    sm.set_active(False)
-                    self._loot_targets      = list(loot)
-                    self._loot_idx          = 0
-                    self._loot_start_t      = now
-                    self._loot_return_state = HuntingState.HUNTING_10
-                    self._enter(HuntingState.LOOTING)
-                    return
-
-                # 최대 공격 횟수 초과 or 적/아데나 없음 → 다음 WP
-                if self._pc_attack_count >= self._pc_max_attacks:
+                # ── 3초 idle 타임아웃: 적 없으면 다음 WP로 이동 ──────
+                # 이게 핵심: 적이 없을 때 설정해둔 동선대로 계속 이동
+                idle_elapsed = now - self._pc_scan_start_t
+                if idle_elapsed >= self._hunt_idle_timeout:
+                    # 아데나 마지막 체크 후 다음 WP
+                    loot = self.loot_detector.find(frame)
+                    if loot:
+                        logger.info(f"[HuntingSM][field] 아데나 {len(loot)}개 발견 → LOOTING")
+                        sm.set_active(False)
+                        self._loot_targets      = list(loot)
+                        self._loot_idx          = 0
+                        self._loot_start_t      = now
+                        self._loot_return_state = HuntingState.HUNTING_10
+                        self._enter(HuntingState.LOOTING)
+                        return
                     logger.info(
-                        f"[HuntingSM][field] 공격 {self._pc_attack_count}회 완료 "
-                        f"→ 다음 WP"
+                        f"[HuntingSM][field] {idle_elapsed:.1f}초 동안 적 없음 "
+                        f"→ 다음 WP 이동"
                     )
                     sm.set_active(False)
                     self._pc_state        = "PATROL"
                     self._pc_attack_count = 0
                     return
 
-                logger.info("[HuntingSM][field] 탐지 없음 → 다음 WP")
-                sm.set_active(False)
-                self._pc_state = "PATROL"
+                # 타임아웃 전: 계속 탐지 대기 (적 올 때까지)
                 return
 
             # ── 기존 모드(tracker=None): 직접 click+drag ─────────────
@@ -820,12 +837,18 @@ class HuntingStateMachine:
         elif self.state == HuntingState.HUNTING_10:
             waypoint = self.patrol_mover.current_label
 
+        # SCAN 상태의 idle 경과시간 (필드모드 HUD용)
+        _scan_idle = 0.0
+        if self._pc_state == "SCAN" and self._pc_scan_start_t > 0:
+            _scan_idle = time.time() - self._pc_scan_start_t
+
         return {
-            "state":        self.state.name,
-            "level":        level if level is not None else "?",
-            "hp_pct":       round(hp_pct, 1),
-            "kills":        self.kills,
-            "potions":      self.potions_used,
-            "elapsed_min":  round(self.elapsed_min, 1),
-            "waypoint":     waypoint,
+            "state":             self.state.name,
+            "level":             level if level is not None else "?",
+            "hp_pct":            round(hp_pct, 1),
+            "kills":             self.kills,
+            "potions":           self.potions_used,
+            "elapsed_min":       round(self.elapsed_min, 1),
+            "waypoint":          waypoint,
+            "scan_idle_elapsed": round(_scan_idle, 1),
         }

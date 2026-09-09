@@ -257,6 +257,9 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     last_mask            = None
     last_roi_frame       = None
     is_moving            = False   # SceneMotionFilter 결과
+    _field_patrol_moving = False   # 필드모드: patrol_mover가 이동 명령 중인지
+    _field_mog2_reset_needed = False  # 이동 완료 후 MOG2 리셋 플래그
+    _field_warmup_frames = 0       # MOG2 리셋 후 warmup 카운트
 
     cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
     # 창을 지정 모니터로 이동 (window_monitor_x/y 설정 기준)
@@ -292,12 +295,40 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
             roi_frame, roi_offset_val = _slice_roi(frame, config.get("roi"))
 
+            # ── 필드모드: patrol_mover 이동 상태 추적 ───────────────
+            # patrol_mover가 MOVING 중이면 SceneMotionFilter를 바이패스하고
+            # MOG2를 리셋해야 함. 이동 완료 시 리셋 + warmup 후 탐지 재개.
+            if is_field and hunting_sm is not None:
+                from automation.state_machine import HuntingState
+                _pm = hunting_sm.patrol_mover
+                _prev_patrol_moving = _field_patrol_moving
+                _field_patrol_moving = (
+                    hunting_sm.state == HuntingState.HUNTING_10
+                    and _pm._state == "MOVING"
+                )
+                # 이동 완료 순간(MOVING→비MOVING) 감지 → MOG2 리셋 예약
+                if _prev_patrol_moving and not _field_patrol_moving:
+                    logger.info("[Field] 순찰 이동 완료 → MOG2 리셋 + warmup 시작")
+                    motion_detector.reset()
+                    tracker._sm.reset()
+                    _field_mog2_reset_needed = False
+                    _field_warmup_frames = sm_cfg.get("settle_frames", 5)
+
             # ── SceneMotionFilter: 이동 중이면 감지 스킵 ──────────────
-            if scene_filter is not None:
+            # 필드모드에서 patrol_mover가 이동 명령 중이면 SceneMotionFilter 무시
+            # (내가 이동하는 건데 "지형이 움직인다"고 오판하는 것 방지)
+            if is_field and _field_patrol_moving:
+                # 순찰 이동 중: SceneFilter 피드만 소비 (판정 무시), MOG2 동결
+                if scene_filter is not None:
+                    scene_filter.update(roi_frame)  # 내부 버퍼 유지용
+                is_moving = True  # 탐지 차단
+            elif scene_filter is not None:
                 is_moving = scene_filter.update(roi_frame)
                 if is_moving:
                     # 상태머신도 리셋 (이동 중 쌓인 적 목록 초기화)
                     tracker._sm.reset()
+            else:
+                is_moving = False
 
             now = time.time()
 
@@ -309,8 +340,17 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             # dungeon 모드는 항상 탐지
             _detection_allowed = (hunting_sm is None) or _is_hunt_state
 
+            # 필드모드 warmup 중: MOG2 피드 공급하되 탐지 결과는 버림
+            if is_field and _field_warmup_frames > 0 and not is_moving:
+                motion_detector.get_mask(roi_frame, learning_rate=-1.0)
+                _field_warmup_frames -= 1
+                if _field_warmup_frames == 0:
+                    logger.info("[Field] MOG2 warmup 완료 → 탐지 재개")
+
             if now - last_detection_time >= detection_interval:
-                if not is_moving and _detection_allowed:
+                # 필드 warmup 중에는 탐지 차단
+                _warmup_blocking = is_field and (_field_warmup_frames > 0)
+                if not is_moving and _detection_allowed and not _warmup_blocking:
                     # ── 정지 중 + 사냥터일 때만 감지 실행 ────────────
                     if debug_view:
                         debug_view.read_trackbars()
@@ -366,7 +406,8 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     last_roi_frame = roi_frame
                 else:
                     # ── 이동 중 or 사냥터 아님: MOG2 동결 + 적 목록 비우기
-                    # learningRate=0 → 배경 모델 동결 (오염 방지)
+                    # 필드 순찰 이동 중: learningRate=0 (배경 모델 동결)
+                    # → 이동 완료 후 reset()으로 깨끗하게 재학습
                     motion_detector.get_mask(roi_frame, learning_rate=0.0)
                     enemies = []
                     if hunting_sm is not None:
@@ -390,8 +431,27 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
             # ── HuntingStateMachine 상태 오버레이 ─────────────────────
             if hunting_sm is not None:
                 sm_status = hunting_sm.get_status()
+
+                # 필드모드: 순찰 서브상태 표시 (PATROL / COMBAT / WARMUP)
+                _field_sub = ""
+                if is_field and sm_status["state"] == "HUNTING_10":
+                    if _field_warmup_frames > 0:
+                        _field_sub = f" [WARMUP {_field_warmup_frames}f]"
+                    elif _field_patrol_moving:
+                        _wp_label  = hunting_sm.patrol_mover.current_label
+                        _field_sub = f" [PATROL→{_wp_label}]"
+                    else:
+                        _pc = hunting_sm._pc_state
+                        if _pc == "SCAN":
+                            _idle_t = sm_status.get("scan_idle_elapsed", 0.0)
+                            _field_sub = f" [SCAN {_idle_t:.1f}s/{hunting_sm._hunt_idle_timeout:.0f}s]"
+                        elif _pc == "KILL_WAIT":
+                            _field_sub = " [COMBAT]"
+                        elif _pc == "LOOT_SCAN":
+                            _field_sub = " [LOOT_SCAN]"
+
                 sm_text   = (
-                    f"[AUTO] {sm_status['state']}  "
+                    f"[AUTO] {sm_status['state']}{_field_sub}  "
                     f"Lv.{sm_status['level']}  "
                     f"HP:{sm_status.get('hp_pct','?')}%  "
                     f"Kill:{sm_status['kills']}  "
@@ -410,7 +470,13 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     "LOOTING":            (0,   255, 200),
                     "DONE_PHASE1":        (255, 255,   0),
                 }
-                sm_color = color_map.get(sm_status["state"], (200, 200, 200))
+                # 필드모드 순찰 이동 중: 주황색으로 구분
+                if is_field and _field_patrol_moving:
+                    sm_color = (0, 165, 255)   # 주황
+                elif is_field and _field_warmup_frames > 0:
+                    sm_color = (200, 200, 0)   # 노란색 (워밍업)
+                else:
+                    sm_color = color_map.get(sm_status["state"], (200, 200, 200))
                 cv2.putText(
                     display_frame, sm_text,
                     (20, display_frame.shape[0] - 20),
