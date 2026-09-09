@@ -63,10 +63,10 @@ def extract_candidate_boxes(crop_bgr):
     combined = np.zeros(hsv.shape[:2], dtype=np.uint8)
 
     ranges = [
-        # 흰색 테두리 (S<40, V>200)
-        {"lower": (0,  0,  200), "upper": (180, 40, 255)},
-        # 회색/은색 텍스트 (S<50, V=140~210)
-        {"lower": (0,  0,  140), "upper": (180, 50, 255)},
+        # 노란/금색 텍스트 (실제 게임: H=15~35, S>100, V>150)
+        {"lower": (15, 100, 150), "upper": (35, 255, 255)},
+        # 밝은 노란색 테두리 (H=10~40, S>80)
+        {"lower": (10,  80, 180), "upper": (40, 255, 255)},
     ]
     for r in ranges:
         combined = cv2.bitwise_or(combined, cv2.inRange(hsv, r["lower"], r["upper"]))
@@ -80,7 +80,7 @@ def extract_candidate_boxes(crop_bgr):
     boxes = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 30 or area > 8000:
+        if area < 20 or area > 15000:
             continue
         x, y, w, h = cv2.boundingRect(cnt)
         x1 = max(0, x-4); y1 = max(0, y-4)
@@ -110,11 +110,12 @@ def extract_candidate_boxes(crop_bgr):
 
 
 def preprocess(patch):
-    """3배 업스케일 + thresh150 역방향"""
+    """3배 업스케일 + OTSU 정방향 (어두운 배경 + 밝은 노란 글씨)"""
     h, w = patch.shape[:2]
     big = cv2.resize(patch, (w*3, h*3), interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
-    _, t = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY_INV)
+    # 어두운 배경 + 밝은 글씨 → OTSU 정방향 (글씨=흰, 배경=검)
+    _, t = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return cv2.cvtColor(t, cv2.COLOR_GRAY2BGR)
 
 
