@@ -18,8 +18,11 @@ import numpy as np
 import time
 
 # ── 설정 ──────────────────────────────────────────────────────────
-SCAN_REGION = {"x": 0, "y": 0, "width": 1920, "height": 850}  # 스캔 영역
-KEYWORDS    = ["아데나", "데나", "Adena", "adena", "ADENA"]
+SCAN_REGION    = {"x": 0, "y": 0, "width": 1920, "height": 850}  # 스캔 영역
+KEYWORDS       = ["아데나", "데나", "Adena", "adena", "ADENA"]
+MIN_CONFIDENCE = 0.03   # easyocr 신뢰도 하한 (낮게 설정 — OCR 오인식 허용)
+CLICK_DELAY    = 0.3    # 클릭 후 대기 시간 (초)
+CLICK_ENABLED  = True   # False 로 바꾸면 클릭 없이 탐지만
 
 # 박스 추출 파라미터 (adena_crop.png 실측)
 WHITE_LOWER = (0,   0,   200)   # 흰 테두리 HSV 하한 (S<50, V>200)
@@ -34,6 +37,39 @@ BOX_PAD     = 4                 # 박스 여백 (px)
 SCALE       = 4                 # 업스케일 배율
 THRESH_VAL  = 135               # 이진화 임계값 (adena_crop.png 기준 최적)
 # ─────────────────────────────────────────────────────────────────
+
+
+def get_clicker():
+    """클릭 라이브러리 초기화 — pydirectinput 우선, 없으면 pyautogui"""
+    try:
+        import pydirectinput
+        pydirectinput.FAILSAFE = False
+        print("[클릭] pydirectinput 사용 (DirectInput — 게임 호환)")
+        return "pydirectinput", pydirectinput
+    except ImportError:
+        pass
+    try:
+        import pyautogui
+        pyautogui.FAILSAFE = False
+        print("[클릭] pyautogui 사용")
+        return "pyautogui", pyautogui
+    except ImportError:
+        pass
+    print("[경고] 클릭 라이브러리 없음 — 탐지만 수행")
+    print("       pip install pydirectinput   # 게임 권장")
+    print("       pip install pyautogui       # 일반 앱")
+    return None, None
+
+
+def do_click(clicker_type, clicker, x: int, y: int):
+    """(x, y) 좌표 좌클릭"""
+    if clicker is None or not CLICK_ENABLED:
+        return
+    if clicker_type == "pydirectinput":
+        clicker.click(x, y)
+    else:
+        clicker.click(x, y)
+    time.sleep(CLICK_DELAY)
 
 
 def get_ocr():
@@ -160,8 +196,8 @@ def do_ocr(ocr_type, ocr, img_bgr):
     return results
 
 
-def scan_frame(frame, ocr_type, ocr, show_debug=True):
-    """한 프레임에서 아데나 탐지"""
+def scan_frame(frame, ocr_type, ocr, clicker_type, clicker, show_debug=True):
+    """한 프레임에서 아데나 탐지 → 탐지 시 즉시 클릭"""
     rx = SCAN_REGION["x"]; ry = SCAN_REGION["y"]
     rw = min(SCAN_REGION["width"],  frame.shape[1] - rx)
     rh = min(SCAN_REGION["height"], frame.shape[0] - ry)
@@ -182,12 +218,21 @@ def scan_frame(frame, ocr_type, ocr, show_debug=True):
 
         matched = False
         for (text, conf) in results:
+            if conf < MIN_CONFIDENCE:
+                continue
             for kw in KEYWORDS:
                 if kw.lower() in text.lower():
                     sx = bx + bw // 2 + rx
                     sy = by + bh // 2 + ry
                     found.append((sx, sy, text.strip(), conf))
                     print(f"  ✅ '{text}'  conf={conf:.2f}  위치=({sx},{sy})  박스=({bx},{by},{bw},{bh})")
+
+                    # ── 클릭 ──────────────────────────────────────
+                    if CLICK_ENABLED and clicker is not None:
+                        do_click(clicker_type, clicker, sx, sy)
+                        print(f"  🖱️  클릭: ({sx}, {sy})")
+                    # ──────────────────────────────────────────────
+
                     matched = True
                     break
 
@@ -209,9 +254,13 @@ def scan_frame(frame, ocr_type, ocr, show_debug=True):
 
 # ── 메인 ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    ocr_type, ocr = get_ocr()
+    ocr_type, ocr           = get_ocr()
+    clicker_type, clicker   = get_clicker()
 
-    # 이미지 파일 지정 시 단발 테스트
+    click_status = "ON ✅" if (CLICK_ENABLED and clicker) else "OFF ❌"
+    print(f"[설정] 클릭={click_status}  MIN_CONF={MIN_CONFIDENCE}  DELAY={CLICK_DELAY}s")
+
+    # 이미지 파일 지정 시 단발 테스트 (클릭 없이 탐지만)
     if len(sys.argv) > 1:
         img_path = sys.argv[1]
         frame = cv2.imread(img_path)
@@ -219,7 +268,9 @@ if __name__ == "__main__":
             print(f"[ERROR] 이미지 로드 실패: {img_path}")
             sys.exit(1)
         print(f"[테스트] 이미지: {img_path}  크기: {frame.shape}")
-        found = scan_frame(frame, ocr_type, ocr, show_debug=True)
+        # 이미지 파일 테스트 시엔 클릭 안 함 (실제 화면 아님)
+        found = scan_frame(frame, ocr_type, ocr,
+                           clicker_type=None, clicker=None, show_debug=True)
         if not found:
             print("  ❌ 아데나 미탐지")
         else:
@@ -228,15 +279,16 @@ if __name__ == "__main__":
         cv2.destroyAllWindows()
         sys.exit(0)
 
-    # 실시간 캡처 루프
-    print(f"[실시간] 화면 캡처 시작  스캔영역={SCAN_REGION}")
+    # 실시간 캡처 루프 (탐지 + 클릭)
+    print(f"\n[실시간] 화면 캡처 시작  스캔영역={SCAN_REGION}")
     print(f"  파라미터: dilation={DILATION_K}x{DILATION_K}×{DILATION_IT}  scale={SCALE}  thresh={THRESH_VAL}")
-    print("  ESC: 종료 / S: 현재 프레임 저장")
+    print("  ESC: 종료 / S: 현재 프레임 저장 / C: 클릭 ON/OFF 토글")
     frame_count = 0
     while True:
         t0 = time.time()
         frame  = capture_screen(SCAN_REGION)
-        found  = scan_frame(frame, ocr_type, ocr, show_debug=True)
+        found  = scan_frame(frame, ocr_type, ocr,
+                            clicker_type, clicker, show_debug=True)
         elapsed = time.time() - t0
 
         if found:
@@ -247,12 +299,15 @@ if __name__ == "__main__":
 
         frame_count += 1
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:           # ESC
+        if key == 27:               # ESC — 종료
             break
-        elif key == ord('s'):
+        elif key == ord('s'):       # S — 프레임 저장
             fname = f"capture_{frame_count}.png"
             cv2.imwrite(fname, frame)
             print(f"\n[저장] {fname}")
+        elif key == ord('c'):       # C — 클릭 토글
+            CLICK_ENABLED = not CLICK_ENABLED
+            print(f"\n[토글] 클릭 {'ON ✅' if CLICK_ENABLED else 'OFF ❌'}")
 
     cv2.destroyAllWindows()
     print("\n종료")
