@@ -232,17 +232,17 @@ if __name__ == "__main__":
             sys.exit(1)
         print(f"[테스트] {img_path}  {frame.shape}")
 
-        rx = SCAN_REGION["x"]; ry = SCAN_REGION["y"]
-        rw = min(SCAN_REGION["width"],  frame.shape[1]-rx)
-        rh = min(SCAN_REGION["height"], frame.shape[0]-ry)
-        crop  = frame[ry:ry+rh, rx:rx+rw]
+        RX = SCAN_REGION["x"]; RY = SCAN_REGION["y"]
+        rw = min(SCAN_REGION["width"],  frame.shape[1]-RX)
+        rh = min(SCAN_REGION["height"], frame.shape[0]-RY)
+        crop  = frame[RY:RY+rh, RX:RX+rw]
         boxes = extract_boxes(crop)
         print(f"  박스 {len(boxes)}개: {boxes}")
 
         debug = crop.copy()
         for (bx, by, bw, bh) in boxes:
             cv2.rectangle(debug, (bx,by), (bx+bw,by+bh), (0,255,0), 2)
-            sx = bx+bw//2+rx; sy = by+bh//2+ry
+            sx = bx+bw//2+RX; sy = by+bh//2+RY
             print(f"  → 탐지 위치: ({sx},{sy})  박스: {bw}×{bh}")
         cv2.imshow("Test", debug)
         cv2.waitKey(0)
@@ -261,14 +261,13 @@ if __name__ == "__main__":
     last_click_time = 0.0
     frame_count     = 0
 
-    while True:
-        t0    = time.time()
-        frame = capture_screen(SCAN_REGION)
+    # 스캔 영역 오프셋 (화면 절대좌표 변환용)
+    RX = SCAN_REGION["x"]
+    RY = SCAN_REGION["y"]
 
-        rx = SCAN_REGION["x"]; ry = SCAN_REGION["y"]
-        rw = min(SCAN_REGION["width"],  frame.shape[1]-rx)
-        rh = min(SCAN_REGION["height"], frame.shape[0]-ry)
-        crop  = frame[ry:ry+rh, rx:rx+rw]
+    while True:
+        t0   = time.time()
+        crop = capture_screen(SCAN_REGION)  # 이미 SCAN_REGION만큼 잘린 이미지
 
         # HSV 박스 탐지 (빠름)
         boxes = extract_boxes(crop)
@@ -277,8 +276,9 @@ if __name__ == "__main__":
         debug = crop.copy()
 
         for (bx, by, bw, bh) in boxes:
-            sx = bx + bw//2 + rx
-            sy = by + bh//2 + ry
+            # 박스 중심 → 화면 절대좌표
+            sx = bx + bw//2 + RX
+            sy = by + bh//2 + RY
 
             cv2.rectangle(debug, (bx,by), (bx+bw,by+bh), (0,255,0), 2)
             cv2.putText(debug, f"{bw}x{bh}", (bx, max(0,by-4)),
