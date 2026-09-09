@@ -49,7 +49,7 @@
     "morph_kernel": 5,
     "min_area": 100,
     "max_area": 50000,
-    "max_missing_frames": 10,
+    "max_missing_frames": 30,
     "max_match_distance": 100,
     "show_debug": true,
     "pico": {
