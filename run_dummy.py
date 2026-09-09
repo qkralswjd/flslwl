@@ -59,12 +59,11 @@ def main():
         logger.info("  tracker._sm.state == IDLE일 때만 다음 WP 이동")
     elif "--full" in args:
         mode = "leveling"
-        # --full: target_level_dummy를 999로 막고 10초 후 강제 전환은
-        #         main.py 루프가 없으므로 HuntingStateMachine 내부 흐름에 맡김
+        # --full: target_level_dummy를 0으로 설정 → 즉시 USE_SPEED_POTION → 사냥터 이동
         auto_cfg.setdefault("level_ocr", {})
-        auto_cfg["level_ocr"]["target_level_dummy"] = 999
+        auto_cfg["level_ocr"]["target_level_dummy"] = 0
         logger.info("=== run_dummy.py [leveling 모드 --full] — 허수아비 → 사냥터 ===")
-        logger.info("  target_level_dummy=999 (레벨 달성 없이 사냥터 자동 전환)")
+        logger.info("  target_level_dummy=0 → 즉시 사냥터 이동")
     else:
         mode = "leveling"
         logger.info("=== run_dummy.py [leveling 모드] — 허수아비 공격부터 시작 ===")
