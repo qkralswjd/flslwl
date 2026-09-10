@@ -78,6 +78,50 @@ class _PatrolCombat:
 
 
 @dataclass
+class _CaptureCfg:
+    monitor_index: int = 0
+    fps: int = 60
+    region_x: int = 0
+    region_y: int = 0
+    region_w: int = 1920
+    region_h: int = 1080
+
+
+@dataclass
+class _DetectionCfg:
+    fps: int = 6
+    templates_dir: str = "config/templates"
+    reject_templates_dir: str = "config/templates_reject"
+    match_threshold: float = 0.50
+    scale_factors: list = field(default_factory=lambda: [1.0])
+    nms_iou_threshold: float = 0.30
+    max_templates: int = 60
+    zone_enabled: bool = False
+    zone_cx: int = 960
+    zone_cy: int = 490
+    zone_half_w: int = 600
+    zone_half_h: int = 250
+    zone_h: int = 500
+
+
+@dataclass
+class _TrackingCfg:
+    max_missing_frames: int = 10
+    max_match_distance: int = 200
+    lock_confirm_frames: int = 2
+    click_pulse_ms: int = 20
+    click_offset_x: int = 0
+    click_offset_y: int = 0
+    wait_dead_timeout_ms: int = 500
+    next_target_cooldown_ms: int = 300
+    priority: str = "nearest_center"
+    drag_enabled: bool = False
+    drag_dx: int = 0
+    drag_dy: int = 0
+    drag_steps: int = 8
+
+
+@dataclass
 class _Settings:
     keys: _Keys = field(default_factory=_Keys)
     dummy: _Dummy = field(default_factory=_Dummy)
@@ -87,6 +131,9 @@ class _Settings:
     hunt_waypoints: _WpCfg = field(default_factory=_WpCfg)
     patrol_waypoints: _WpCfg = field(default_factory=_WpCfg)
     patrol_combat: _PatrolCombat = field(default_factory=_PatrolCombat)
+    capture: _CaptureCfg = field(default_factory=_CaptureCfg)
+    detection: _DetectionCfg = field(default_factory=_DetectionCfg)
+    tracking: _TrackingCfg = field(default_factory=_TrackingCfg)
 
 
 # ─────────────────────────── 더미 Pico ───────────────────────────

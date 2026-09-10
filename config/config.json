@@ -1,0 +1,109 @@
+{
+  "_comment": "bot2 기본 설정. 실제 환경에 맞게 수정해 사용하세요.",
+
+  "capture": {
+    "monitor_index": 1,
+    "region_x": 0,
+    "region_y": 0,
+    "region_w": 1920,
+    "region_h": 1080,
+    "fps": 30
+  },
+
+  "detection": {
+    "fps": 6,
+    "templates_dir": "config/templates",
+    "reject_templates_dir": "config/templates_reject",
+    "match_threshold": 0.50,
+    "scale_factors": [1.0, 0.9, 1.1],
+    "nms_iou_threshold": 0.3,
+    "max_templates": 60,
+    "zone_enabled": true,
+    "zone_cx": 960,
+    "zone_cy": 540,
+    "zone_half_w": 700,
+    "zone_half_h": 400
+  },
+
+  "tracking": {
+    "max_missing_frames": 15,
+    "max_match_distance": 120,
+    "lock_confirm_frames": 2,
+    "wait_dead_timeout_ms": 6000,
+    "next_target_cooldown_ms": 300,
+    "priority": "nearest_center",
+    "drag_enabled": false,
+    "drag_dx": 80,
+    "drag_dy": 0,
+    "drag_steps": 8
+  },
+
+  "pico": {
+    "enabled": true,
+    "port": "COM4",
+    "baudrate": 115200,
+    "click_pulse_ms": 20,
+    "click_offset_x": 0,
+    "click_offset_y": 0
+  },
+
+  "keys": {
+    "potion": "F5",
+    "potion_cooldown_ms": 4000,
+    "scroll": "F6",
+    "speed_potion": "F9",
+    "speed_potion_wait_ms": 800,
+    "pickup": "Z"
+  },
+
+  "hp": {
+    "bar_x": 42,
+    "bar_y": 1038,
+    "bar_w": 114,
+    "bar_h": 8,
+    "low_threshold": 0.40
+  },
+
+  "level_ocr": {
+    "roi_x": 0,
+    "roi_y": 0,
+    "roi_w": 200,
+    "roi_h": 60,
+    "target_level_dummy": 5,
+    "target_level_hunt": 15
+  },
+
+  "loot": {
+    "enabled": true,
+    "timeout_ms": 8000,
+    "rescan_max": 4,
+    "click_delay_ms": 80,
+    "hsv_low": [0, 0, 200],
+    "hsv_high": [180, 30, 255],
+    "min_area": 50,
+    "max_area": 5000
+  },
+
+  "dummy": {
+    "drag_from": {"x": 960, "y": 620},
+    "drag_to":   {"x": 960, "y": 400},
+    "drag_steps": 8,
+    "attack_interval_ms": 500,
+    "move_timeout_ms": 3000,
+    "attack_duration_s": 0
+  },
+
+  "patrol_waypoints": {
+    "points": [],
+    "move_timeout_ms": 4000
+  },
+
+  "hunt_waypoints": {
+    "points": [],
+    "move_timeout_ms": 5000
+  },
+
+  "patrol_combat": {
+    "engage_timeout_ms": 20000
+  }
+}

@@ -77,6 +77,7 @@ class DungeonMode(BaseFSM):
         hp_reader=None,
         loot_detector=None,
         max_runs: int = 0,
+        base_dir: str = ".",
     ) -> None:
         super().__init__()
         self.settings = settings
@@ -86,6 +87,8 @@ class DungeonMode(BaseFSM):
         self.hp_reader = hp_reader
         self.loot_detector = loot_detector
         self.max_runs = max_runs
+        self._base_dir = base_dir
+        self._hunt_loop = None   # CLEARING 진입 시 생성
 
         # ── 키 설정 ───────────────────────────────────────────────
         keys = settings.keys
@@ -136,6 +139,9 @@ class DungeonMode(BaseFSM):
 
     def stop(self) -> None:
         self._running = False
+        if self._hunt_loop:
+            self._hunt_loop.stop()
+            self._hunt_loop = None
         if self.tracker:
             self.tracker.set_active(False)
         self.transition(DungeonState.IDLE, force=True)
@@ -183,13 +189,28 @@ class DungeonMode(BaseFSM):
         self.pico.click(ex, ey, pulse_ms=80)
 
     def on_enter_CLEARING(self):
-        log.info("[Dungeon] CLEARING 시작")
-        if self.tracker:
-            self.tracker.set_active(True)
+        log.info("[Dungeon] CLEARING 시작 — HuntLoop 가동")
+        if self._hunt_loop is None:
+            from modes.hunt_loop import build_hunt_loop
+            self._hunt_loop = build_hunt_loop(
+                settings  = self.settings,
+                pico      = self.pico,
+                grab_fn   = self.grab,
+                base_dir  = self._base_dir,
+            )
+            # tracker / loot_detector 공유
+            if self.tracker is None:
+                self.tracker = self._hunt_loop._tracker
+            if self.loot_detector is None:
+                self.loot_detector = self._hunt_loop._loot
+        self._hunt_loop.start()
 
     def on_enter_LOOTING(self):
         log.info("[Dungeon] LOOTING 시작")
         self._loot_rescan_cnt = 0
+        # 루팅 중 HuntLoop 일시 정지
+        if self._hunt_loop:
+            self._hunt_loop.stop()
         if self.tracker:
             self.tracker.set_active(False)
         if self.loot_detector:
@@ -211,6 +232,9 @@ class DungeonMode(BaseFSM):
     def on_enter_DONE(self):
         log.info("[Dungeon] DONE — %d회 완료", self._run_count)
         self._running = False
+        if self._hunt_loop:
+            self._hunt_loop.stop()
+            self._hunt_loop = None
         if self.tracker:
             self.tracker.set_active(False)
 

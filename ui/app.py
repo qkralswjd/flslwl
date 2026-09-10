@@ -543,63 +543,79 @@ class BotApp:
             self._log(f"■ {mode_name} 정지")
 
     def _create_mode(self, mode_name: str, pico, grab):
-        """모드 인스턴스 생성."""
+        """모드 인스턴스 생성.
+
+        FieldMode / DungeonMode 는 내부적으로 HuntLoop 를 통해
+        탐지→추적→공격→루팅을 처리하므로,
+        tracker / loot_detector 를 외부에서 주입하지 않아도 된다.
+        (base_dir 만 전달하면 HuntLoop 가 settings 에서 모두 구성)
+        """
+        import os
         s = self.settings
 
-        # 공통 perception 객체
-        try:
-            from perception.hp import HpReader
-            hp_reader = HpReader.from_settings(s)
-        except Exception:
-            hp_reader = None
-
-        try:
-            from perception.loot import LootDetector
-            loot_detector = LootDetector.from_settings(s)
-        except Exception:
-            loot_detector = None
-
-        # tracker
-        try:
-            from core.tracking import NearestNeighborTracker
-            tracker = NearestNeighborTracker.from_settings(
-                s,
-                pico_click_callback=lambda x, y: pico.click(x, y),
-                pico_drag_callback=lambda fx, fy, tx, ty: pico.drag(fx, fy, tx, ty),
-            )
-        except Exception:
-            tracker = None
+        # bot2 루트 디렉토리 (app.py 기준 두 단계 위)
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
         if mode_name == "leveling":
+            # LevelingMode 는 HuntLoop 미사용 — 직접 tracker 주입
             from modes.leveling import LevelingMode
+
+            try:
+                from perception.hp import HpReader
+                hp_reader = HpReader.from_settings(s)
+            except Exception:
+                hp_reader = None
+
+            try:
+                from perception.loot import LootDetector
+                loot_detector = LootDetector.from_settings(s)
+            except Exception:
+                loot_detector = None
+
+            try:
+                from core.tracking import NearestNeighborTracker
+                tracker = NearestNeighborTracker.from_settings(
+                    s,
+                    pico_click_callback=lambda x, y: pico.click(x, y),
+                    pico_drag_callback=lambda fx, fy, tx, ty: pico.drag(fx, fy, tx, ty),
+                )
+            except Exception:
+                tracker = None
+
             try:
                 from perception.level import LevelReader
                 level_reader = LevelReader.from_settings(s)
             except Exception:
                 level_reader = None
+
             return LevelingMode(
                 settings=s, pico=pico, frame_grabber=grab,
                 tracker=tracker, hp_reader=hp_reader,
                 level_reader=level_reader, loot_detector=loot_detector,
             )
+
         elif mode_name == "dungeon":
             from modes.dungeon import DungeonMode
             max_runs = getattr(self, "_dungeon_max_runs", None)
             mr = max_runs.get() if max_runs else 0
             return DungeonMode(
                 settings=s, pico=pico, frame_grabber=grab,
-                tracker=tracker, hp_reader=hp_reader,
-                loot_detector=loot_detector, max_runs=mr,
+                max_runs=mr,
             )
+
         elif mode_name == "field":
+            # FieldMode 는 HuntLoop 를 내부에서 자동 생성
+            # → tracker / loot_detector 를 None 으로 주입하면
+            #   build_hunt_loop() 에서 Settings 기반으로 생성
             from modes.field import FieldMode
             max_kills = getattr(self, "_field_max_kills", None)
             mk = max_kills.get() if max_kills else 0
             return FieldMode(
                 settings=s, pico=pico, frame_grabber=grab,
-                tracker=tracker, hp_reader=hp_reader,
-                loot_detector=loot_detector, max_kills=mk,
+                max_kills=mk,
+                base_dir=base_dir,
             )
+
         else:
             raise ValueError(f"알 수 없는 모드: {mode_name}")
 
