@@ -85,7 +85,7 @@
     },
     "realtime_template": {
         "_comment": "field 모드 전용 — RealtimeTemplateDetector 파라미터",
-        "match_threshold": 0.55,
+        "match_threshold": 0.50,
         "scale_factors": [1.0],
         "nms_iou_threshold": 0.30,
         "max_templates": null
