@@ -244,6 +244,8 @@ class HuntingStateMachine:
         self._loot_timeout        = loot_cfg.get("timeout_ms", 3000) / 1000.0
         self._loot_start_t        = 0.0
         self._loot_return_state   = HuntingState.HUNTING_10  # 루팅 후 복귀 상태
+        self._loot_post_wait      = loot_cfg.get("post_click_wait_ms", 3000) / 1000.0  # 마지막 클릭 후 대기
+        self._loot_all_clicked_t  = 0.0   # 모든 아데나 클릭 완료 시각
 
         # ── 사냥 중 적 비활성 타임아웃 ────────────────────────────────
         # config_automation.json patrol_waypoints.idle_timeout_s 로 설정 가능
@@ -657,6 +659,7 @@ class HuntingStateMachine:
                         self._loot_targets      = list(loot)
                         self._loot_idx          = 0
                         self._loot_start_t      = now
+                        self._loot_all_clicked_t = 0.0
                         self._loot_return_state = HuntingState.HUNTING_10
                         self._enter(HuntingState.LOOTING)
                         return
@@ -721,6 +724,7 @@ class HuntingStateMachine:
                 self._loot_targets      = list(loot)
                 self._loot_idx          = 0
                 self._loot_start_t      = now
+                self._loot_all_clicked_t = 0.0
                 self._loot_return_state = HuntingState.HUNTING_10
                 self._enter(HuntingState.LOOTING)
                 return
@@ -780,6 +784,7 @@ class HuntingStateMachine:
                 self._loot_targets      = list(loot)
                 self._loot_idx          = 0
                 self._loot_start_t      = now
+                self._loot_all_clicked_t = 0.0
                 self._loot_return_state = HuntingState.HUNTING_10
                 self._enter(HuntingState.LOOTING)
             else:
@@ -797,10 +802,17 @@ class HuntingStateMachine:
             self._enter(self._loot_return_state)
             return
 
-        # 모두 클릭 완료
+        # 모두 클릭 완료 → post_click_wait 대기 후 복귀
         if self._loot_idx >= len(self._loot_targets):
+            if self._loot_all_clicked_t == 0.0:
+                self._loot_all_clicked_t = now
+                logger.info(f"[HuntingSM] 아데나 클릭 완료 → {self._loot_post_wait*1000:.0f}ms 대기 후 복귀")
+                return
+            if now - self._loot_all_clicked_t < self._loot_post_wait:
+                return
             logger.info("[HuntingSM] 루팅 완료 → 사냥 복귀")
             self.kills += 1
+            self._loot_all_clicked_t = 0.0
             self._enter(self._loot_return_state)
             return
 

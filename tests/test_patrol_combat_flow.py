@@ -254,12 +254,14 @@ class TestLootScan:
         sm._loot_targets      = [(100, 200, "아데나", 0.9)]
         sm._loot_idx          = 0
         sm._loot_start_t      = time.time()
+        sm._loot_all_clicked_t = 0.0
         sm._loot_return_state = HuntingState.HUNTING_10
         sm._enter(HuntingState.LOOTING)
         sm._pc_state          = "LOOT_SCAN"   # 공격 후 아데나 발견 케이스
 
-        # 루팅 완료 처리
+        # 루팅 완료 처리 — post_click_wait 스킵을 위해 클릭 완료 시각을 과거로 설정
         sm._loot_idx = 99   # 모두 처리된 것으로
+        sm._loot_all_clicked_t = time.time() - 10.0  # 이미 대기 완료
         sm.update(frame, enemies=[])
 
         assert sm.state == HuntingState.HUNTING_10
