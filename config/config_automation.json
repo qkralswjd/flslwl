@@ -107,11 +107,11 @@
     "loot": {
         "_comment": "아데나 줍기 설정",
         "scan_region": {
-            "_comment": "아데나 텍스트 탐색 영역 — UI(하단 채팅창/스킬바) 제외한 게임 화면만",
-            "x": 0,
-            "y": 0,
-            "width": 1920,
-            "height": 850
+            "_comment": "아데나 탐색 영역 — detection_zone과 동일 (x=360~1560, y=240~740)",
+            "x": 360,
+            "y": 240,
+            "width": 1200,
+            "height": 500
         },
         "keywords": [
             "아데나",
