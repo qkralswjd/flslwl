@@ -24,8 +24,17 @@ _WHITE_LOWER = np.array([0,   0, 200], dtype=np.uint8)
 _WHITE_UPPER = np.array([180, 50, 255], dtype=np.uint8)
 
 # dilation 커널 — 테두리 픽셀을 굵게 만들어 연결성 확보
-_DIL_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+# 모듈 레벨에서 즉시 생성하지 않고 첫 사용 시 lazy 초기화
+_DIL_KERNEL = None   # _get_dil_kernel() 로 접근
 _DIL_ITERS = 3
+
+
+def _get_dil_kernel():
+    """dilation 커널을 lazy 초기화하여 반환."""
+    global _DIL_KERNEL
+    if _DIL_KERNEL is None:
+        _DIL_KERNEL = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    return _DIL_KERNEL
 
 # 박스 크기 필터 (노이즈 제거)
 _MIN_AREA = 200
@@ -197,7 +206,7 @@ class LootDetector:
         mask = cv2.inRange(hsv, _WHITE_LOWER, _WHITE_UPPER)
 
         # Dilation — 테두리 픽셀 연결
-        mask = cv2.dilate(mask, _DIL_KERNEL, iterations=_DIL_ITERS)
+        mask = cv2.dilate(mask, _get_dil_kernel(), iterations=_DIL_ITERS)
 
         # 컨투어 → 바운딩 박스
         contours, _ = cv2.findContours(
