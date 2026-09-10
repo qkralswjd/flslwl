@@ -421,7 +421,7 @@ class NearestNeighborTracker(BaseTracker):
             next_target_cooldown_ms = t.next_target_cooldown_ms,
             target_priority         = t.priority,
             roi_width               = d.zone_half_w * 2 if d.zone_enabled else c.region_w,
-            roi_height              = d.zone_h       if d.zone_enabled else c.region_h,
+            roi_height              = d.zone_half_h * 2 if d.zone_enabled else c.region_h,
             drag_enabled            = t.drag_enabled,
             drag_dx                 = t.drag_dx,
             drag_dy                 = t.drag_dy,

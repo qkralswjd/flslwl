@@ -80,6 +80,16 @@ class PicoSettings:
 class TrackingSettings:
     max_missing_frames: int = 30
     max_match_distance: int = 100
+    # ── SequentialTargetSM 파라미터 (PicoSettings 에서 분리) ──────────
+    lock_confirm_frames:     int   = 2
+    wait_dead_timeout_ms:    int   = 5000
+    next_target_cooldown_ms: int   = 300
+    priority:                str   = "nearest_center"
+    # ── 드래그 ────────────────────────────────────────────────────────
+    drag_enabled: bool = True
+    drag_dx:      int  = 80
+    drag_dy:      int  = 0
+    drag_steps:   int  = 8
 
 
 @dataclass
@@ -242,7 +252,7 @@ class Settings:
             "capture":          asdict(self.capture),
             "detection":        asdict(self.detection),
             "pico":             asdict(self.pico),
-            "tracking":         asdict(self.tracking),
+            "tracking":         asdict(self.tracking),   # 새 필드 자동 포함
             "overlay":          asdict(self.overlay),
             "hp_bar":           asdict(self.hp_bar),
             "level_ocr":        asdict(self.level_ocr),
@@ -346,8 +356,16 @@ def _apply(s: Settings, raw: dict) -> None:
 
     t = raw.get("tracking", {})
     s.tracking = TrackingSettings(
-        max_missing_frames=_g(t,"max_missing_frames",s.tracking.max_missing_frames),
-        max_match_distance=_g(t,"max_match_distance",s.tracking.max_match_distance),
+        max_missing_frames      = _g(t, "max_missing_frames",      s.tracking.max_missing_frames),
+        max_match_distance      = _g(t, "max_match_distance",      s.tracking.max_match_distance),
+        lock_confirm_frames     = _g(t, "lock_confirm_frames",     s.tracking.lock_confirm_frames),
+        wait_dead_timeout_ms    = _g(t, "wait_dead_timeout_ms",    s.tracking.wait_dead_timeout_ms),
+        next_target_cooldown_ms = _g(t, "next_target_cooldown_ms", s.tracking.next_target_cooldown_ms),
+        priority                = _g(t, "priority",                s.tracking.priority),
+        drag_enabled            = _g(t, "drag_enabled",            s.tracking.drag_enabled),
+        drag_dx                 = _g(t, "drag_dx",                 s.tracking.drag_dx),
+        drag_dy                 = _g(t, "drag_dy",                 s.tracking.drag_dy),
+        drag_steps              = _g(t, "drag_steps",              s.tracking.drag_steps),
     )
 
     o = raw.get("overlay", {})
