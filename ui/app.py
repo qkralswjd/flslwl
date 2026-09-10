@@ -23,7 +23,10 @@ import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from ui.preview import PreviewWindow
 
 # ─────────────────────────── 로거 큐 핸들러 ──────────────────────
 
@@ -112,6 +115,10 @@ class BotApp:
         self._pico     = None
         self._capturer = None
 
+        # ── cv2 미리보기 창 ───────────────────────────────────────────
+        self._preview: Optional["PreviewWindow"] = None
+        self._preview_enabled = tk.BooleanVar(value=True)  # 기본: ON
+
         # ── UI 구성 ───────────────────────────────────────────────────
         self._build_ui()
         self._poll_logs()
@@ -176,9 +183,24 @@ class BotApp:
         tk.Label(status_bar, textvariable=self._status_var,
                  font=_FONT_UI, fg=_FG, bg=_BG2).pack(side="left", padx=8)
 
+        # 미리보기 토글 체크박스 (하단 상태바 오른쪽)
+        tk.Checkbutton(
+            status_bar,
+            text="📷 실시간 미리보기 (F2)",
+            variable=self._preview_enabled,
+            command=self._on_preview_toggle,
+            font=("Segoe UI", 9),
+            fg=_FG, bg=_BG2,
+            selectcolor=_BG,
+            activebackground=_BG2,
+            activeforeground=_FG,
+            relief="flat",
+        ).pack(side="right", padx=8)
+
         # 전역 단축키
         self.root.bind("<F5>",  lambda e: self._emergency_stop())
         self.root.bind("<Escape>", lambda e: self._emergency_stop())
+        self.root.bind("<F2>",  lambda e: self._toggle_preview())
 
     def _make_tab(self, nb, name: str) -> tk.Frame:
         f = tk.Frame(nb, bg=_BG)
@@ -452,6 +474,10 @@ class BotApp:
             messagebox.showerror("오류", "설정이 로드되지 않았습니다.")
             return
 
+        # 미리보기 창 시작 (체크박스 ON 인 경우)
+        if self._preview_enabled.get():
+            self._start_preview()
+
         self._mode_stop.clear()
         self._mode_thread = threading.Thread(
             target=self._run_mode,
@@ -494,6 +520,13 @@ class BotApp:
                     except Exception:
                         pass
 
+                # 미리보기 창에 상태 전달
+                if self._preview is not None:
+                    try:
+                        self._preview.update_mode_state(mode.state.name)
+                    except Exception:
+                        pass
+
                 if mode.is_done:
                     self._log(f"✅ {mode_name} 완료")
                     break
@@ -504,6 +537,8 @@ class BotApp:
         finally:
             mode.stop()
             self._active_mode = None
+            # 미리보기 창 정지
+            self._stop_preview()
             self.root.after(0, self._status_var.set, "대기 중")
             self._log(f"■ {mode_name} 정지")
 
@@ -576,7 +611,82 @@ class BotApp:
                 self._active_mode.stop()
             except Exception:
                 pass
+        self._stop_preview()
         self._log("⛔ 긴급 정지")
+
+    # ────────────────────────────── 미리보기 제어 ──────────────────
+
+    def _start_preview(self) -> None:
+        """cv2 미리보기 창을 백그라운드 스레드로 연다."""
+        if self._preview is not None and self._preview.is_running:
+            return  # 이미 실행 중
+        try:
+            from ui.preview import PreviewWindow
+        except ImportError as e:
+            self._log(f"⚠ PreviewWindow import 실패: {e}", level="warning")
+            return
+
+        # 탐지기 / 트래커 / HP 리더 가져오기 (모드가 생성한 것 재사용)
+        detector  = None
+        tracker   = None
+        hp_reader = None
+
+        try:
+            from core.detection import RealtimeTemplateDetector
+            detector = RealtimeTemplateDetector.from_settings(self.settings)
+        except Exception:
+            pass
+
+        try:
+            from core.tracking import NearestNeighborTracker
+            tracker = NearestNeighborTracker.from_settings(self.settings)
+        except Exception:
+            pass
+
+        try:
+            from perception.hp import HpReader
+            hp_reader = HpReader.from_settings(self.settings)
+        except Exception:
+            pass
+
+        pico, capturer = self._get_hardware()
+
+        self._preview = PreviewWindow(
+            capturer=capturer,
+            detector=detector,
+            tracker=tracker,
+            hp_reader=hp_reader,
+            pico=pico,
+            settings=self.settings,
+        )
+        self._preview.start()
+        self._log("📷 실시간 미리보기 시작")
+
+    def _stop_preview(self) -> None:
+        """cv2 미리보기 창을 닫는다."""
+        if self._preview is not None:
+            try:
+                self._preview.stop()
+            except Exception:
+                pass
+            self._preview = None
+            self._log("📷 미리보기 종료")
+
+    def _toggle_preview(self) -> None:
+        """F2 — 미리보기 창 토글."""
+        if self._preview is not None and self._preview.is_running:
+            self._preview_enabled.set(False)
+            self._stop_preview()
+        else:
+            self._preview_enabled.set(True)
+            self._start_preview()
+
+    def _on_preview_toggle(self) -> None:
+        """체크박스 변경 시 호출."""
+        if self._preview_enabled.get():
+            self._start_preview()
+        else:
+            self._stop_preview()
 
     def _test_pico_connection(self):
         pico, _ = self._get_hardware()
@@ -629,6 +739,7 @@ class BotApp:
     def close(self):
         """리소스 정리 후 창 닫기."""
         self._emergency_stop()
+        self._stop_preview()
         if self._pico:
             try:
                 self._pico.stop()
