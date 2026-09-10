@@ -88,6 +88,6 @@
         "match_threshold": 0.50,
         "scale_factors": [1.0],
         "nms_iou_threshold": 0.30,
-        "max_templates": null
+        "max_templates": 60
     }
 }
