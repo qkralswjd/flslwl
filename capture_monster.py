@@ -3,10 +3,10 @@
 사용법:
     py -3.11 capture_monster.py
 
-조작키:
-    T         : 화면 프리즈 → 드래그로 영역 선택 → 엔터로 저장
-    R         : 화면 프리즈 → 드래그로 영역 선택 → 엔터로 리젝트 저장
-    C / ESC   : 프리즈 취소 (실시간 복귀)
+조작키 (백그라운드 실행 중):
+    T         : 현재 화면 프리즈 → 풀스크린으로 표시 → 드래그 → 엔터 저장
+    R         : 현재 화면 프리즈 → 풀스크린으로 표시 → 드래그 → 엔터 리젝트 저장
+    ESC / C   : 취소
     Q         : 종료
 
 저장 위치:
@@ -25,22 +25,20 @@ import mss
 import numpy as np
 
 # ── 경로 설정 ────────────────────────────────────────────────────────
-HERE            = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH     = os.path.join(HERE, "config", "config.json")
-TEMPLATES_DIR   = os.path.join(HERE, "config", "templates")
-REJECTS_DIR     = os.path.join(HERE, "config", "templates_reject")
+HERE          = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH   = os.path.join(HERE, "config", "config.json")
+TEMPLATES_DIR = os.path.join(HERE, "config", "templates")
+REJECTS_DIR   = os.path.join(HERE, "config", "templates_reject")
 
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
 os.makedirs(REJECTS_DIR,   exist_ok=True)
 
 
-# ── config 로드 ──────────────────────────────────────────────────────
 def _load_config():
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-# ── 파일 저장 ────────────────────────────────────────────────────────
 def _imwrite(path: str, img):
     ext = os.path.splitext(path)[1] or ".png"
     ok, buf = cv2.imencode(ext, img)
@@ -61,16 +59,16 @@ def _next_index(directory: str, prefix: str, ext: str = ".png") -> int:
     return max(nums, default=0) + 1
 
 
-# ── 윈도우 키 감지 ────────────────────────────────────────────────────
+# ── Win32 키/마우스 ───────────────────────────────────────────────────
 GetAsyncKeyState = ctypes.windll.user32.GetAsyncKeyState
 GetCursorPos     = ctypes.windll.user32.GetCursorPos
 
-VK_T      = ord('T')
-VK_R      = ord('R')
-VK_Q      = ord('Q')
-VK_C      = ord('C')
-VK_ESC    = 0x1B
-VK_ENTER  = 0x0D
+VK_T       = ord('T')
+VK_R       = ord('R')
+VK_Q       = ord('Q')
+VK_C       = ord('C')
+VK_ESC     = 0x1B
+VK_ENTER   = 0x0D
 VK_LBUTTON = 0x01
 
 
@@ -91,26 +89,34 @@ def lmb_down():
     return bool(GetAsyncKeyState(VK_LBUTTON) & 0x8000)
 
 
-# ── 프리즈 모드: 정지 화면에서 드래그 선택 ──────────────────────────
-def freeze_and_select(frozen_frame, win_name, mon_left, mon_top, scale):
-    """프리즈된 화면에서 드래그로 영역 선택. 엔터=확정, ESC/C=취소.
-    반환: (x1,y1,x2,y2) 모니터 기준 절대좌표 or None
+# ── 풀스크린 프리즈 선택 ─────────────────────────────────────────────
+def freeze_and_select_fullscreen(frozen_frame, win_name, mon_left, mon_top):
+    """프리즈된 화면을 1:1 풀사이즈로 띄우고 드래그로 영역 선택.
+    엔터=확정, ESC/C=취소.
+    반환: (x1,y1,x2,y2) 프레임 기준 픽셀좌표 or None
     """
-    drag_start  = None
-    drag_end    = None
-    drag_active = False
-    sel_rect    = None
-    prev_lmb    = False
-    prev_keys   = {}
+    h, w = frozen_frame.shape[:2]
 
-    status = "드래그로 몬스터 선택 → 엔터 저장 / ESC 취소"
+    # 풀스크린 창 띄우기
+    cv2.namedWindow(win_name, cv2.WND_PROP_FULLSCREEN)
+    cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+
+    drag_start   = None
+    drag_end     = None
+    drag_active  = False
+    sel_rect     = None
+    prev_lmb     = False
+    prev_keys    = {}
 
     while True:
         disp = frozen_frame.copy()
 
+        # 현재 커서 위치 (모니터 기준 절대좌표 → 프레임 내 좌표)
         cx, cy = get_cursor()
-        rx = int((cx - mon_left) * scale)
-        ry = int((cy - mon_top)  * scale)
+        rx = cx - mon_left
+        ry = cy - mon_top
+        rx = max(0, min(w - 1, rx))
+        ry = max(0, min(h - 1, ry))
 
         cur_lmb = lmb_down()
 
@@ -130,18 +136,10 @@ def freeze_and_select(frozen_frame, win_name, mon_left, mon_top, scale):
             y1 = min(drag_start[1], drag_end[1])
             x2 = max(drag_start[0], drag_end[0])
             y2 = max(drag_start[1], drag_end[1])
-            w, h = x2 - x1, y2 - y1
-            if w > 5 and h > 5:
-                # 화면 표시 좌표 → 실제 모니터 좌표로 역변환
-                sx1 = int(x1 / scale)
-                sy1 = int(y1 / scale)
-                sx2 = int(x2 / scale)
-                sy2 = int(y2 / scale)
-                sel_rect = (sx1, sy1, sx2, sy2)
-                status = f"선택: ({sx1},{sy1})-({sx2},{sy2})  엔터=저장  ESC=취소"
+            if (x2 - x1) > 5 and (y2 - y1) > 5:
+                sel_rect = (x1, y1, x2, y2)
             else:
                 sel_rect = None
-                status = "너무 작음. 다시 드래그하세요."
 
         prev_lmb = cur_lmb
 
@@ -149,40 +147,31 @@ def freeze_and_select(frozen_frame, win_name, mon_left, mon_top, scale):
         if drag_active and drag_start:
             cv2.rectangle(disp, drag_start, (rx, ry), (0, 255, 255), 1)
 
-        # 확정 선택 사각형 (표시 좌표)
+        # 확정 선택 사각형
         if sel_rect:
-            dx1 = int(sel_rect[0] * scale)
-            dy1 = int(sel_rect[1] * scale)
-            dx2 = int(sel_rect[2] * scale)
-            dy2 = int(sel_rect[3] * scale)
-            cv2.rectangle(disp, (dx1, dy1), (dx2, dy2), (0, 0, 255), 2)
+            x1, y1, x2, y2 = sel_rect
+            cv2.rectangle(disp, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            # 크기 표시
+            label = f"{x2-x1}x{y2-y1}px  ENTER=저장  ESC=취소"
+            cv2.putText(disp, label, (x1, max(y1-8, 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
 
-            # 미리보기
-            crop_disp = disp[dy1:dy2, dx1:dx2]
-            if crop_disp.size > 0:
-                ph = pw = 150
-                preview = cv2.resize(crop_disp, (pw, ph))
-                disp[10:10+ph, disp.shape[1]-pw-10:disp.shape[1]-10] = preview
-                cv2.rectangle(disp,
-                              (disp.shape[1]-pw-10, 10),
-                              (disp.shape[1]-10, 10+ph),
-                              (0, 0, 255), 1)
-
-        # 상태 메시지
-        cv2.putText(disp, "[FREEZE] " + status, (10, disp.shape[0]-15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 1, cv2.LINE_AA)
+        # 안내 메시지
+        guide = "드래그로 몬스터 선택 → ENTER 저장 / ESC 취소"
+        cv2.putText(disp, guide, (10, h - 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2, cv2.LINE_AA)
 
         cv2.imshow(win_name, disp)
         cv2.waitKey(1)
 
-        # 엔터 → 저장
         if key_just_pressed(VK_ENTER, prev_keys):
             if sel_rect:
+                # 창 닫고 일반 모드로 복귀
+                cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
                 return sel_rect
-            status = "먼저 드래그로 영역을 선택하세요."
-
-        # ESC / C → 취소
+            # 선택 없으면 무시
         if key_just_pressed(VK_ESC, prev_keys) or key_just_pressed(VK_C, prev_keys):
+            cv2.setWindowProperty(win_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
             return None
 
 
@@ -204,80 +193,74 @@ def main():
     mon_h    = mon["height"]
 
     print("=" * 56)
-    print("  몬스터 템플릿 캡처 도구 (프리즈 모드)")
+    print("  몬스터 템플릿 캡처 도구 (풀스크린 프리즈 모드)")
     print("=" * 56)
     print(f"  모니터 #{monitor_idx}  {mon_w}x{mon_h}")
     print()
-    print("  T       : 화면 프리즈 → 드래그 → 엔터 → 템플릿 저장")
-    print("  R       : 화면 프리즈 → 드래그 → 엔터 → 리젝트 저장")
-    print("  ESC / C : 프리즈 취소")
+    print("  T       : 화면 프리즈 → 풀스크린 → 드래그 → 엔터 → 템플릿 저장")
+    print("  R       : 화면 프리즈 → 풀스크린 → 드래그 → 엔터 → 리젝트 저장")
+    print("  ESC / C : 취소")
     print("  Q       : 종료")
     print()
 
     WIN = "capture_monster"
     cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(WIN, 960, 540)
-
-    # 표시용 스케일 (창 크기 / 실제 해상도)
-    disp_h = min(mon_h, 810)
-    scale  = disp_h / mon_h
+    cv2.resizeWindow(WIN, 400, 80)
 
     prev_keys  = {}
-    status_msg = "T키: 프리즈 후 템플릿 저장  /  R키: 리젝트 저장  /  Q: 종료"
+    status_msg = "T=템플릿저장  R=리젝트저장  Q=종료"
 
     while True:
-        # ── 실시간 캡처 ──────────────────────────────────────────
+        # 실시간 캡처 (미리보기용 작은 창)
         shot  = sct.grab(mon)
         frame = cv2.cvtColor(np.asarray(shot), cv2.COLOR_BGRA2BGR)
 
-        # 표시용 리사이즈
-        disp_w = int(mon_w * scale)
-        disp   = cv2.resize(frame, (disp_w, disp_h))
-
-        # 템플릿/리젝트 개수
         n_tmpl = len([f for f in os.listdir(TEMPLATES_DIR) if f.endswith(".png")])
         n_rej  = len([f for f in os.listdir(REJECTS_DIR)   if f.endswith(".png")])
-        cv2.putText(disp, f"templates={n_tmpl}  rejects={n_rej}",
-                    (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-        cv2.putText(disp, status_msg, (10, disp_h - 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
 
-        cv2.imshow(WIN, disp)
+        info = np.zeros((80, 400, 3), dtype=np.uint8)
+        cv2.putText(info, f"templates={n_tmpl}  rejects={n_rej}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 1)
+        cv2.putText(info, status_msg,
+                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        cv2.imshow(WIN, info)
         cv2.waitKey(1)
 
-        # ── T : 프리즈 → 템플릿 저장 ─────────────────────────────
+        # T : 프리즈 → 풀스크린 → 템플릿 저장
         if key_just_pressed(VK_T, prev_keys):
-            frozen      = frame.copy()
-            frozen_disp = cv2.resize(frozen, (disp_w, disp_h))
-            rect = freeze_and_select(frozen_disp, WIN, 0, 0, scale)
+            frozen = frame.copy()
+            rect = freeze_and_select_fullscreen(frozen, WIN, mon_left, mon_top)
+            cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(WIN, 400, 80)
             if rect:
                 x1, y1, x2, y2 = rect
                 crop = frozen[y1:y2, x1:x2]
                 idx  = _next_index(TEMPLATES_DIR, "mob_")
                 path = os.path.join(TEMPLATES_DIR, f"mob_{idx:03d}.png")
                 _imwrite(path, crop)
-                status_msg = f"✓ 템플릿 저장: mob_{idx:03d}.png ({crop.shape[1]}x{crop.shape[0]}px)"
+                status_msg = f"✓ mob_{idx:03d}.png ({crop.shape[1]}x{crop.shape[0]}px)"
                 print(f"[템플릿] {path}  size={crop.shape[1]}x{crop.shape[0]}")
             else:
-                status_msg = "취소됨"
+                status_msg = "취소됨 — T=템플릿  R=리젝트  Q=종료"
 
-        # ── R : 프리즈 → 리젝트 저장 ─────────────────────────────
+        # R : 프리즈 → 풀스크린 → 리젝트 저장
         elif key_just_pressed(VK_R, prev_keys):
-            frozen      = frame.copy()
-            frozen_disp = cv2.resize(frozen, (disp_w, disp_h))
-            rect = freeze_and_select(frozen_disp, WIN, 0, 0, scale)
+            frozen = frame.copy()
+            rect = freeze_and_select_fullscreen(frozen, WIN, mon_left, mon_top)
+            cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(WIN, 400, 80)
             if rect:
                 x1, y1, x2, y2 = rect
                 crop = frozen[y1:y2, x1:x2]
                 idx  = _next_index(REJECTS_DIR, "rej_")
                 path = os.path.join(REJECTS_DIR, f"rej_{idx:03d}.png")
                 _imwrite(path, crop)
-                status_msg = f"✓ 리젝트 저장: rej_{idx:03d}.png ({crop.shape[1]}x{crop.shape[0]}px)"
+                status_msg = f"✓ rej_{idx:03d}.png ({crop.shape[1]}x{crop.shape[0]}px)"
                 print(f"[리젝트] {path}  size={crop.shape[1]}x{crop.shape[0]}")
             else:
-                status_msg = "취소됨"
+                status_msg = "취소됨 — T=템플릿  R=리젝트  Q=종료"
 
-        # ── Q : 종료 ──────────────────────────────────────────────
+        # Q : 종료
         elif key_just_pressed(VK_Q, prev_keys):
             break
 
