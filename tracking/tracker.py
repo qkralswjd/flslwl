@@ -315,6 +315,8 @@ class NearestNeighborTracker(BaseTracker):
         drag_dx: int = 80,
         drag_dy: int = 0,
         drag_steps: int = 8,
+        # ── 반복 공격 파라미터 ────────────────────────────────────
+        repeat_attack_interval_ms: float = 800.0,
     ):
         self.max_missing_frames = max_missing_frames
         self.max_match_distance = max_match_distance
@@ -326,19 +328,20 @@ class NearestNeighborTracker(BaseTracker):
 
         # 순차 타겟 상태머신 초기화
         self._sm = SequentialTargetStateMachine(
-            pico_click_callback   = pico_click_callback,
-            pico_drag_callback    = pico_drag_callback,
-            to_screen_fn          = self._to_screen,
-            lock_confirm_frames   = lock_confirm_frames,
-            wait_dead_timeout_ms  = wait_dead_timeout_ms,
-            next_target_cooldown_ms = next_target_cooldown_ms,
-            priority              = target_priority,
-            roi_width             = roi_width,
-            roi_height            = roi_height,
-            drag_enabled          = drag_enabled,
-            drag_dx               = drag_dx,
-            drag_dy               = drag_dy,
-            drag_steps            = drag_steps,
+            pico_click_callback       = pico_click_callback,
+            pico_drag_callback        = pico_drag_callback,
+            to_screen_fn              = self._to_screen,
+            lock_confirm_frames       = lock_confirm_frames,
+            wait_dead_timeout_ms      = wait_dead_timeout_ms,
+            next_target_cooldown_ms   = next_target_cooldown_ms,
+            priority                  = target_priority,
+            roi_width                 = roi_width,
+            roi_height                = roi_height,
+            drag_enabled              = drag_enabled,
+            drag_dx                   = drag_dx,
+            drag_dy                   = drag_dy,
+            drag_steps                = drag_steps,
+            repeat_attack_interval_ms = repeat_attack_interval_ms,
         )
 
     # ── 좌표 변환 ──────────────────────────────────────────────────
