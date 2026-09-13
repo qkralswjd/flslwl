@@ -90,6 +90,8 @@ class TrackingSettings:
     drag_dx:      int  = 80
     drag_dy:      int  = 0
     drag_steps:   int  = 8
+    # ── 반복 공격 ─────────────────────────────────────────────────────
+    repeat_attack_interval_ms: float = 800.0
 
 
 @dataclass
@@ -362,10 +364,11 @@ def _apply(s: Settings, raw: dict) -> None:
         wait_dead_timeout_ms    = _g(t, "wait_dead_timeout_ms",    s.tracking.wait_dead_timeout_ms),
         next_target_cooldown_ms = _g(t, "next_target_cooldown_ms", s.tracking.next_target_cooldown_ms),
         priority                = _g(t, "priority",                s.tracking.priority),
-        drag_enabled            = _g(t, "drag_enabled",            s.tracking.drag_enabled),
-        drag_dx                 = _g(t, "drag_dx",                 s.tracking.drag_dx),
-        drag_dy                 = _g(t, "drag_dy",                 s.tracking.drag_dy),
-        drag_steps              = _g(t, "drag_steps",              s.tracking.drag_steps),
+        drag_enabled              = _g(t, "drag_enabled",              s.tracking.drag_enabled),
+        drag_dx                   = _g(t, "drag_dx",                   s.tracking.drag_dx),
+        drag_dy                   = _g(t, "drag_dy",                   s.tracking.drag_dy),
+        drag_steps                = _g(t, "drag_steps",                s.tracking.drag_steps),
+        repeat_attack_interval_ms = _g(t, "repeat_attack_interval_ms", s.tracking.repeat_attack_interval_ms),
     )
 
     o = raw.get("overlay", {})

@@ -32,10 +32,11 @@
     "wait_dead_timeout_ms": 6000,
     "next_target_cooldown_ms": 300,
     "priority": "nearest_center",
-    "drag_enabled": false,
+    "drag_enabled": true,
     "drag_dx": 80,
     "drag_dy": 0,
-    "drag_steps": 8
+    "drag_steps": 8,
+    "repeat_attack_interval_ms": 800
   },
 
   "pico": {

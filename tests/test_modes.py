@@ -119,6 +119,7 @@ class _TrackingCfg:
     drag_dx: int = 0
     drag_dy: int = 0
     drag_steps: int = 8
+    repeat_attack_interval_ms: float = 800.0
 
 
 @dataclass

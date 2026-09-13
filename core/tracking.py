@@ -149,6 +149,8 @@ class SequentialTargetStateMachine:
         drag_dy:      int  = 0,
         drag_steps:   int  = 8,
         pico_drag_callback: Optional[Callable[[int, int, int, int], None]] = None,
+        # ── 반복 공격 파라미터 ─────────────────────────────────────
+        repeat_attack_interval_ms: float = 800.0,
     ) -> None:
         self._click_cb            = pico_click_callback
         self._drag_cb             = pico_drag_callback
@@ -164,11 +166,13 @@ class SequentialTargetStateMachine:
         self._drag_dx             = drag_dx
         self._drag_dy             = drag_dy
         self._drag_steps          = drag_steps
+        self._repeat_attack_interval_ms = repeat_attack_interval_ms
 
         self.state:     TargetState    = TargetState.IDLE
         self.target_id: Optional[int]  = None
         self._lock_streak:      int    = 0
         self._state_entered_at: float  = time.time()
+        self._last_attack_at:   float  = 0.0   # WAITING_DEAD 반복 드래그 타이머
 
         # 공격 활성 플래그
         # False 이면 update() 가 즉시 reset+return → Pico 명령 차단
@@ -242,6 +246,7 @@ class SequentialTargetStateMachine:
 
         # ── CLICKING (1프레임 통과) ────────────────────────────────────────
         if self.state == TargetState.CLICKING:
+            self._last_attack_at = now   # 첫 공격 시간 기록 → WAITING_DEAD 반복 간격 기준
             self._enter(TargetState.WAITING_DEAD, now)
             return
 
@@ -256,6 +261,17 @@ class SequentialTargetStateMachine:
             elif timed_out:
                 logger.warning("[TargetSM] 타겟 #%d 대기 타임아웃 → 강제 전환", self.target_id)
                 self._enter(TargetState.COOLDOWN, now)
+            else:
+                # 타겟이 아직 살아있으면 일정 간격마다 드래그 반복 공격
+                elapsed_since_last = (now - self._last_attack_at) * 1000.0
+                if elapsed_since_last >= self._repeat_attack_interval_ms:
+                    if self.target_id in all_tracked:
+                        logger.info(
+                            "[TargetSM] WAITING_DEAD 반복공격 #%d (%.0fms 경과)",
+                            self.target_id, elapsed_since_last,
+                        )
+                        self._fire_click(all_tracked[self.target_id])
+                        self._last_attack_at = now
             return
 
         # ── COOLDOWN ──────────────────────────────────────────────────────
@@ -363,6 +379,8 @@ class NearestNeighborTracker(BaseTracker):
         drag_dx:      int  = 80,
         drag_dy:      int  = 0,
         drag_steps:   int  = 8,
+        # ── 반복 공격 ─────────────────────────────────────
+        repeat_attack_interval_ms: float = 800.0,
     ) -> None:
         self.max_missing_frames   = max_missing_frames
         self.max_match_distance   = max_match_distance
@@ -385,7 +403,8 @@ class NearestNeighborTracker(BaseTracker):
             drag_enabled            = drag_enabled,
             drag_dx                 = drag_dx,
             drag_dy                 = drag_dy,
-            drag_steps              = drag_steps,
+            drag_steps                = drag_steps,
+            repeat_attack_interval_ms = repeat_attack_interval_ms,
         )
 
     # ── 팩토리 ─────────────────────────────────────────────────────────────
@@ -426,6 +445,7 @@ class NearestNeighborTracker(BaseTracker):
             drag_dx                 = t.drag_dx,
             drag_dy                 = t.drag_dy,
             drag_steps              = t.drag_steps,
+            repeat_attack_interval_ms = t.repeat_attack_interval_ms,
         )
 
     # ── 좌표 변환 ──────────────────────────────────────────────────────────
