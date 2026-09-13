@@ -86,6 +86,8 @@ class SequentialTargetStateMachine:
         drag_dy: int        = 0,     # 드래그 거리 Y (px, 양수=아래)
         drag_steps: int     = 8,     # 드래그 중간 단계 수
         pico_drag_callback: Optional[Callable[[int,int,int,int], None]] = None,
+        # ── 반복 공격 파라미터 ──────────────────────
+        repeat_attack_interval_ms: float = 800.0,  # WAITING_DEAD 드래그 반복 간격
     ):
         self._click_cb              = pico_click_callback
         self._drag_cb               = pico_drag_callback
@@ -101,11 +103,13 @@ class SequentialTargetStateMachine:
         self._drag_dx               = drag_dx
         self._drag_dy               = drag_dy
         self._drag_steps            = drag_steps
+        self._repeat_attack_interval_ms = repeat_attack_interval_ms
 
         self.state: TargetState            = TargetState.IDLE
         self.target_id: Optional[int]      = None   # 현재 타겟 Enemy ID
         self._lock_streak: int             = 0      # LOCKING 연속 확인 카운트
         self._state_entered_at: float      = time.time()
+        self._last_attack_at: float        = 0.0    # WAITING_DEAD 반복 드래그 타이머
 
         # ── 공격 활성 플래그 ────────────────────────────────────────────
         # set_active(False) 하면 update() 호출 자체가 reset+return 됨
@@ -183,6 +187,7 @@ class SequentialTargetStateMachine:
 
         # ── CLICKING (1프레임 통과) ────────────────────────────────────
         if self.state == TargetState.CLICKING:
+            self._last_attack_at = now   # 첫 공격 시간 기록 → WAITING_DEAD 반복 기준
             self._enter(TargetState.WAITING_DEAD, now)
             return
 
@@ -197,6 +202,17 @@ class SequentialTargetStateMachine:
             elif timed_out:
                 logger.warning(f"[SM] 타겟 #{self.target_id} 대기 타임아웃 → 강제 전환")
                 self._enter(TargetState.COOLDOWN, now)
+            else:
+                # 타겟이 아직 살아있으면 반복 드래그 공격
+                elapsed_since_last = (now - self._last_attack_at) * 1000.0
+                if elapsed_since_last >= self._repeat_attack_interval_ms:
+                    if self.target_id in all_tracked:
+                        logger.info(
+                            f"[SM] WAITING_DEAD 반복공격 #{self.target_id} "
+                            f"({elapsed_since_last:.0f}ms 경과)"
+                        )
+                        self._fire_click(all_tracked[self.target_id])
+                        self._last_attack_at = now
             return
 
         # ── COOLDOWN ──────────────────────────────────────────────────

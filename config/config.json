@@ -66,7 +66,8 @@
         "drag_enabled": true,
         "drag_dx": 80,
         "drag_dy": 0,
-        "drag_steps": 8
+        "drag_steps": 8,
+        "repeat_attack_interval_ms": 800
     },
     "scene_motion": {
         "enabled": true,

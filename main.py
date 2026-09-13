@@ -165,10 +165,11 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
         roi_width               = roi_dict.get("width",  1440) if roi_dict else 1440,
         roi_height              = roi_dict.get("height",  780) if roi_dict else  780,
         # ── 드래그 파라미터 ─────────────────────────────────────
-        drag_enabled            = drag_enabled,
-        drag_dx                 = pico_cfg.get("drag_dx", 80),
-        drag_dy                 = pico_cfg.get("drag_dy",  0),
-        drag_steps              = pico_cfg.get("drag_steps", 8),
+        drag_enabled              = drag_enabled,
+        drag_dx                   = pico_cfg.get("drag_dx", 80),
+        drag_dy                   = pico_cfg.get("drag_dy",  0),
+        drag_steps                = pico_cfg.get("drag_steps", 8),
+        repeat_attack_interval_ms = pico_cfg.get("repeat_attack_interval_ms", 800.0),
     )
 
     # ── HuntingStateMachine 초기화 (tracker 생성 후 주입) ─────────────
