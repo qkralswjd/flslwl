@@ -85,8 +85,8 @@
         "half_height": 250
     },
     "yolo": {
-        "_comment": "YOLO 몬스터/아데나 탐지 엔진 설정",
-        "enabled": false,
+        "_comment": "YOLO 몬스터/아데나 탐지 엔진 설정 (메인 탐지 엔진)",
+        "enabled": true,
         "model_path": "runs/detect/monster_v1/weights/best.pt",
         "confidence": 0.4,
         "iou_threshold": 0.45,

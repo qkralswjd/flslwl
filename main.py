@@ -1,10 +1,10 @@
 """Entry point: capture -> detect -> track -> overlay -> (optional) Pico click/drag.
 
-탐지 엔진: RealtimeTemplateDetector (단일 엔진 — 모든 모드 공통)
-    - MOG2 배경차분 완전 제거
+탐지 엔진: YoloDetector (메인 엔진 — 모든 모드 공통)
+    - YOLOv8 커스텀 모델 (monster=0, adena=1 2클래스)
+    - MOG2 배경차분·템플릿 매칭 완전 제거
     - 이동 중/정지 중 구분 없이 매 프레임 탐지
-    - warmup·SceneMotionFilter 불필요
-    - config/templates/ PNG 파일 사용
+    - model_path: config/config.json yolo.model_path
 
 실행 모드:
     python main.py              → dungeon (탐지+클릭만)
@@ -22,9 +22,7 @@ import cv2
 
 from capture.screen_capture import ScreenCapturer
 from config.config_loader import load_config
-from paths import get_templates_dir, get_reject_templates_dir
 from debug.debug_view import DebugView
-from detection.realtime_template_detector import RealtimeTemplateDetector
 from detection.yolo_detector import YoloDetector
 from automation.adena_collector import YoloAdenaCollector
 from overlay.overlay import draw_enemies, draw_hud, draw_roi, draw_detection_zone
@@ -86,11 +84,10 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     """Runs the capture/detect/track/overlay loop until 'q' is pressed or stop_event is set.
 
     Args:
-        mode: "leveling" → 1~10레벨 자동사냥 (드래그, HuntingStateMachine ON, 템플릿매칭 OFF)
-              "dungeon"  → 던전 사냥 모드 (MOG2+템플릿매칭 ON, HuntingStateMachine OFF)
-              "field"    → 필드 이동 사냥 모드 (WaypointMover + HuntingStateMachine ON,
-                           [NEW] RealtimeTemplateDetector — MOG2 완전 우회,
-                           이동 중에도 탐지 가능, SceneMotionFilter·warmup 불필요)
+        mode: "leveling" → 1~10레벨 자동사냥 (드래그, HuntingStateMachine ON)
+              "dungeon"  → 던전 사냥 모드 (HuntingStateMachine OFF)
+              "field"    → 필드 이동 사냥 모드 (WaypointMover + HuntingStateMachine ON)
+              탐지 엔진: 모든 모드 공통 — YoloDetector (monster=0, adena=1)
     """
     is_leveling = (mode == "leveling")
     is_field    = (mode == "field")
@@ -98,7 +95,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                    "dungeon":  "🏰 던전 사냥 모드",
                    "field":    "🗺 필드 이동 사냥 모드"}.get(mode, mode)
     logger.info(f"=== 실행 모드: {mode_label} ===")
-    logger.info("[탐지엔진] RealtimeTemplateDetector (단일 엔진)")
+    logger.info("[탐지엔진] YoloDetector (메인 엔진)")
 
     # ── HuntingStateMachine 초기화 (레벨링/필드 모드) ─────────────────
     hunting_sm = None
@@ -138,7 +135,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     click_callback = pico_click if pico_worker else None
     drag_callback  = pico_drag  if (pico_worker and drag_enabled) else None
 
-    # SceneMotionFilter 완전 제거 — RealtimeTemplateDetector는 이동 중에도 탐지 가능
+    # SceneMotionFilter 불필요 — YoloDetector는 이동 중에도 탐지 가능
     scene_filter = None
 
     # capture_region → 모니터 내 offset
@@ -198,34 +195,22 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     elif _hunting_sm_init_pending and not pico_worker:
         logger.warning("[Automation] Pico 미연결 — HuntingStateMachine 비활성화")
 
-    # ── RealtimeTemplateDetector 초기화 (단일 탐지 엔진 — 모든 모드 공통) ──
-    clf_config = config.get("classifier", {})
-    rtm_cfg    = config.get("realtime_template", {})
-    rt_detector = RealtimeTemplateDetector(
-        templates_dir     = clf_config.get("templates_dir") or get_templates_dir(),
-        match_threshold   = rtm_cfg.get("match_threshold",    0.55),
-        scale_factors     = rtm_cfg.get("scale_factors",      [1.0]),
-        nms_iou_threshold = rtm_cfg.get("nms_iou_threshold",  0.30),
-        max_templates     = rtm_cfg.get("max_templates",       None),
-    )
-    logger.info(
-        f"[탐지엔진] RealtimeTemplateDetector 준비 완료 "
-        f"(threshold={rtm_cfg.get('match_threshold', 0.55)} "
-        f"scales={rtm_cfg.get('scale_factors', [1.0])})"
-    )
-
-    # ── YOLO 탐지 엔진 초기화 ─────────────────────────────────────────
+    # ── YoloDetector 초기화 (메인 탐지 엔진 — 모든 모드 공통) ──────────
     yolo_cfg = config.get("yolo", {})
     yolo_detector = YoloDetector(
-        model_path   = yolo_cfg.get("model_path",    "runs/detect/monster_v1/weights/best.pt"),
-        confidence   = yolo_cfg.get("confidence",    0.4),
-        iou_threshold= yolo_cfg.get("iou_threshold", 0.45),
-        device       = yolo_cfg.get("device",        "cuda"),
-        img_size     = yolo_cfg.get("img_size",      640),
-        enabled      = yolo_cfg.get("enabled",       False),
+        model_path    = yolo_cfg.get("model_path",    "runs/detect/monster_v1/weights/best.pt"),
+        confidence    = yolo_cfg.get("confidence",    0.4),
+        iou_threshold = yolo_cfg.get("iou_threshold", 0.45),
+        device        = yolo_cfg.get("device",        "cuda"),
+        img_size      = yolo_cfg.get("img_size",      640),
+        enabled       = yolo_cfg.get("enabled",       True),
     )
     logger.info(
-        f"[탐지엔진] YoloDetector {'활성화' if yolo_cfg.get('enabled') else '비활성화 (enabled=false)'}"
+        f"[탐지엔진] YoloDetector — "
+        f"model={yolo_cfg.get('model_path', 'best.pt')} "
+        f"conf={yolo_cfg.get('confidence', 0.4)} "
+        f"device={yolo_cfg.get('device', 'cuda')} "
+        f"loaded={yolo_detector.is_loaded}"
     )
 
     # ── YOLO 아데나 수집기 초기화 ─────────────────────────────────────
@@ -246,7 +231,7 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
     # NearestNeighborTracker에 on_kill_callback 주입 (tracker 이미 생성됨)
     tracker._sm._on_kill_cb = on_kill
 
-    debug_view = None  # MOG2 DebugView 제거
+    debug_view = None  # DebugView 미사용 (YOLO 모드)
 
     capture_interval   = 1.0 / max(config["capture_fps"], 1)
     detection_interval = 1.0 / max(config["detection_fps"], 1)
@@ -318,10 +303,14 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                     proc_start = time.time()
 
                     # ════════════════════════════════════════════════════
-                    # 단일 탐지 엔진 — RealtimeTemplateDetector
+                    # 메인 탐지 엔진 — YoloDetector (monster=0, adena=1)
                     # 모든 모드(dungeon/leveling/field) 동일하게 적용
                     # ════════════════════════════════════════════════════
-                    detections = rt_detector.detect(roi_frame)
+                    yolo_dets  = yolo_detector.detect(roi_frame)
+
+                    # monster 클래스만 tracker로 전달 (adena는 별도 수집)
+                    detections = [d for d in yolo_dets
+                                  if d.class_id == YoloDetector.CLASS_MONSTER]
 
                     # detection_zone 필터
                     dz = config.get("detection_zone")
@@ -351,15 +340,13 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
 
                     enemies = tracker.update(detections, dt if dt > 0 else 1e-3)
 
-                    # ── YOLO 탐지 + 아데나 수집 ──────────────────────
-                    if yolo_detector.enabled:
-                        yolo_dets = yolo_detector.detect(roi_frame)
-                        adena_collector.check_and_collect(
-                            yolo_dets,
-                            pico_worker,
-                            roi_offset      = roi_offset,
-                            capture_offset  = cap_offset,
-                        )
+                    # ── 아데나 수집 (adena class_id=1 전달) ──────────
+                    adena_collector.check_and_collect(
+                        yolo_dets,
+                        pico_worker,
+                        roi_offset     = roi_offset,
+                        capture_offset = cap_offset,
+                    )
 
                     # HuntingStateMachine 업데이트
                     if hunting_sm is not None:
