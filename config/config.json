@@ -84,6 +84,22 @@
         "half_width": 600,
         "half_height": 250
     },
+    "yolo": {
+        "_comment": "YOLO 몬스터/아데나 탐지 엔진 설정",
+        "enabled": false,
+        "model_path": "runs/detect/monster_v1/weights/best.pt",
+        "confidence": 0.4,
+        "iou_threshold": 0.45,
+        "device": "cuda",
+        "img_size": 640,
+        "adena": {
+            "enabled": true,
+            "search_radius": 120,
+            "collect_timeout_sec": 3.0,
+            "click_hold_ms": 50,
+            "max_picks": 5
+        }
+    },
     "realtime_template": {
         "_comment": "field 모드 전용 — RealtimeTemplateDetector 파라미터",
         "match_threshold": 0.50,

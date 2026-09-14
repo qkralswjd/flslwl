@@ -25,6 +25,8 @@ from config.config_loader import load_config
 from paths import get_templates_dir, get_reject_templates_dir
 from debug.debug_view import DebugView
 from detection.realtime_template_detector import RealtimeTemplateDetector
+from detection.yolo_detector import YoloDetector
+from automation.adena_collector import YoloAdenaCollector
 from overlay.overlay import draw_enemies, draw_hud, draw_roi, draw_detection_zone
 from tracking.tracker import NearestNeighborTracker
 
@@ -212,6 +214,38 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
         f"scales={rtm_cfg.get('scale_factors', [1.0])})"
     )
 
+    # ── YOLO 탐지 엔진 초기화 ─────────────────────────────────────────
+    yolo_cfg = config.get("yolo", {})
+    yolo_detector = YoloDetector(
+        model_path   = yolo_cfg.get("model_path",    "runs/detect/monster_v1/weights/best.pt"),
+        confidence   = yolo_cfg.get("confidence",    0.4),
+        iou_threshold= yolo_cfg.get("iou_threshold", 0.45),
+        device       = yolo_cfg.get("device",        "cuda"),
+        img_size     = yolo_cfg.get("img_size",      640),
+        enabled      = yolo_cfg.get("enabled",       False),
+    )
+    logger.info(
+        f"[탐지엔진] YoloDetector {'활성화' if yolo_cfg.get('enabled') else '비활성화 (enabled=false)'}"
+    )
+
+    # ── YOLO 아데나 수집기 초기화 ─────────────────────────────────────
+    adena_cfg = yolo_cfg.get("adena", {})
+    adena_collector = YoloAdenaCollector(
+        enabled            = adena_cfg.get("enabled",            True),
+        search_radius      = adena_cfg.get("search_radius",      120),
+        collect_timeout_sec= adena_cfg.get("collect_timeout_sec",3.0),
+        click_hold_ms      = adena_cfg.get("click_hold_ms",      50),
+        max_picks          = adena_cfg.get("max_picks",          5),
+    )
+
+    # ── on_kill_callback — 사망 확정 시 adena_collector에 좌표 전달 ──
+    def on_kill(sx: int, sy: int) -> None:
+        adena_collector.record_kill(sx, sy)
+        logger.info(f"[YOLO] on_kill 콜백 호출 — 사망 위치 ({sx}, {sy}) 기록")
+
+    # NearestNeighborTracker에 on_kill_callback 주입 (tracker 이미 생성됨)
+    tracker._sm._on_kill_cb = on_kill
+
     debug_view = None  # MOG2 DebugView 제거
 
     capture_interval   = 1.0 / max(config["capture_fps"], 1)
@@ -316,6 +350,16 @@ def run(config, stop_event=None, status_callback=None, automation_config=None, m
                         )
 
                     enemies = tracker.update(detections, dt if dt > 0 else 1e-3)
+
+                    # ── YOLO 탐지 + 아데나 수집 ──────────────────────
+                    if yolo_detector.enabled:
+                        yolo_dets = yolo_detector.detect(roi_frame)
+                        adena_collector.check_and_collect(
+                            yolo_dets,
+                            pico_worker,
+                            roi_offset      = roi_offset,
+                            capture_offset  = cap_offset,
+                        )
 
                     # HuntingStateMachine 업데이트
                     if hunting_sm is not None:

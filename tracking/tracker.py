@@ -88,6 +88,8 @@ class SequentialTargetStateMachine:
         pico_drag_callback: Optional[Callable[[int,int,int,int], None]] = None,
         # ── 반복 공격 파라미터 ──────────────────────
         repeat_attack_interval_ms: float = 800.0,  # WAITING_DEAD 드래그 반복 간격
+        # ── YOLO 아데나 수집 콜백 ───────────────────
+        on_kill_callback: Optional[Callable[[int, int], None]] = None,
     ):
         self._click_cb              = pico_click_callback
         self._drag_cb               = pico_drag_callback
@@ -104,6 +106,9 @@ class SequentialTargetStateMachine:
         self._drag_dy               = drag_dy
         self._drag_steps            = drag_steps
         self._repeat_attack_interval_ms = repeat_attack_interval_ms
+        # COOLDOWN 진입(사망 확정) 시 호출되는 콜백 — YoloAdenaCollector.record_kill 등
+        # 인자: (screen_cx, screen_cy) — 사망한 Enemy 의 화면 절대좌표
+        self._on_kill_cb = on_kill_callback
 
         self.state: TargetState            = TargetState.IDLE
         self.target_id: Optional[int]      = None   # 현재 타겟 Enemy ID
@@ -198,9 +203,11 @@ class SequentialTargetStateMachine:
 
             if target_gone:
                 logger.info(f"[SM] 타겟 #{self.target_id} 사망 확인 → 다음 타겟 탐색")
+                self._notify_kill(all_tracked)
                 self._enter(TargetState.COOLDOWN, now)
             elif timed_out:
                 logger.warning(f"[SM] 타겟 #{self.target_id} 대기 타임아웃 → 강제 전환")
+                self._notify_kill(all_tracked)
                 self._enter(TargetState.COOLDOWN, now)
             else:
                 # 타겟이 아직 살아있으면 반복 드래그 공격
@@ -227,6 +234,31 @@ class SequentialTargetStateMachine:
             return
 
     # ── 내부 헬퍼 ────────────────────────────────────────────────────
+
+    def _notify_kill(self, all_tracked: Dict[int, Enemy]) -> None:
+        """사망 확정 시 on_kill_callback 을 호출한다.
+
+        마지막으로 알려진 Enemy 좌표를 화면 절대좌표로 변환해서 전달.
+        콜백이 없거나 Enemy 정보가 없으면 조용히 무시.
+        """
+        if self._on_kill_cb is None:
+            return
+        if self.target_id is None:
+            return
+        # 죽기 직전 마지막 위치 — all_tracked 에 아직 남아 있을 수 있음
+        enemy = all_tracked.get(self.target_id)
+        if enemy is None:
+            # tracker 에서 이미 삭제된 경우 — 콜백 호출 불가
+            logger.debug(f"[SM] _notify_kill: Enemy #{self.target_id} 이미 삭제됨")
+            return
+        sx, sy = self._to_screen(enemy.center_x, enemy.center_y)
+        logger.info(
+            f"[SM] 사망 콜백 → Enemy #{self.target_id} screen=({sx},{sy})"
+        )
+        try:
+            self._on_kill_cb(sx, sy)
+        except Exception as e:
+            logger.error(f"[SM] on_kill_callback 오류: {e}")
 
     def _enter(self, new_state: TargetState, now: float) -> None:
         # LOCKING 진입 시 streak 리셋 — 단, 이미 LOCKING 상태에서 같은 타겟
@@ -317,6 +349,8 @@ class NearestNeighborTracker(BaseTracker):
         drag_steps: int = 8,
         # ── 반복 공격 파라미터 ────────────────────────────────────
         repeat_attack_interval_ms: float = 800.0,
+        # ── 킬 콜백 (YOLO 아데나 수집기 연동) ─────────────────────
+        on_kill_callback: Optional[Callable[[int, int], None]] = None,
     ):
         self.max_missing_frames = max_missing_frames
         self.max_match_distance = max_match_distance
@@ -342,6 +376,7 @@ class NearestNeighborTracker(BaseTracker):
             drag_dy                   = drag_dy,
             drag_steps                = drag_steps,
             repeat_attack_interval_ms = repeat_attack_interval_ms,
+            on_kill_callback          = on_kill_callback,
         )
 
     # ── 좌표 변환 ──────────────────────────────────────────────────
